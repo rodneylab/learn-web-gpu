@@ -1,0 +1,7 @@
+function(target_treat_all_warnings_as_errors Target)
+  if(MSVC)
+    target_compile_options(${Target} PRIVATE /W4)
+  else()
+    target_compile_options(${Target} PRIVATE -Wall -Wextra -pedantic)
+  endif()
+endfunction()

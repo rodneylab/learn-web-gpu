@@ -1,0 +1,44 @@
+name: Ubuntu CI Test
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@eb238b55efaa70779f274895e782ed17c84f2895 # v2.6.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@ee0669bd1cc54295c223e0bb666b733df41de1c5 # v2.7.0
+      - name: install
+        run: sudo apt-get update && sudo apt-get install gcovr lcov libxrandr-dev libxcursor-dev libudev-dev libopenal-dev libflac-dev libvorbis-dev libgl1-mesa-dev libegl1-mesa-dev freeglut3-dev
+      - name: configure
+        run: |
+          cmake -H. -Bbuild -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=On
+      - name: building
+        run: |
+          cmake --build build --config Debug --target Catch_tests_run
+      - name: run unit tests
+        working-directory: ./build/bin
+        run: |
+          ./Catch_tests_run
+      - name: generate coverage
+        working-directory: ./build
+        run: |
+          make cov
+      - name: Install gcovr
+        run: |
+          pip install -r requirements.txt  --require-hashes
+      - name: Generate JSON coverage report
+        working-directory: ./build
+        run: |
+          gcovr -r .. . --filter ../src/ --branches --cobertura > coverage.xml
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@eaaf4bedf32dbdc6b720b63067d99c4d77d6047d # v3
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
