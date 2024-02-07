@@ -13,11 +13,13 @@ cpmaddpackage("gh:fmtlib/fmt#e69e5f977d458f2650bb346dadf2ad30c5320281") # 10.x
 cpmaddpackage(
   "gh:eliemichel/WebGPU-distribution#def06a045c3fa1478e1b1047bb81b92f97b8483d"
 )# wgpu
+cpmaddpackage(
+  "gh:eliemichel/glfw3webgpu#e4cd9131c7472b000641a104116c2fecf13d55a7")# v1.1.0
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS True)
 
 add_executable(App src/main.cpp)
-target_link_libraries(App PRIVATE fmt glfw webgpu)
+target_link_libraries(App PRIVATE fmt glfw webgpu glfw3webgpu)
 
 set_target_properties(
   App
