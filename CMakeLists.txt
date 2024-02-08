@@ -4,6 +4,7 @@ project(
   VERSION 0.1.0
   LANGUAGES CXX C)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_EXPORT_COMPILE_COMMANDS True)
 add_library(learnwebgpu_compiler_flags INTERFACE)
 target_compile_features(learnwebgpu_compiler_flags INTERFACE cxx_std_17)
