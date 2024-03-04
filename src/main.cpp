@@ -3,10 +3,24 @@
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
-//#include <webgpu/webgpu.h>
+
+#define WEBGPU_CPP_IMPLEMENTATION
+
 #include <webgpu/webgpu.hpp>
 
 #include <iostream>
+
+static void key_callback(GLFWwindow *window,
+                         int key,
+                         int /* scancode */,
+                         int action,
+                         int /* mods */)
+{
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+    {
+        glfwSetWindowShouldClose(window, GL_TRUE);
+    }
+}
 
 int main(int /*unused*/, char ** /*unused*/)
 {
@@ -113,20 +127,125 @@ int main(int /*unused*/, char ** /*unused*/)
     swapChainDesc.width = kWindowWidth;
     swapChainDesc.height = kWindowHeight;
 
-    swapChainDesc.usage = WGPUTextureUsage_RenderAttachment;
-    swapChainDesc.presentMode = WGPUPresentMode_Fifo;
+    swapChainDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    swapChainDesc.presentMode = wgpu::PresentMode::Fifo;
 
 #ifdef WGPU_BACKEND_WGPU
     wgpu::TextureFormat swapChainFormat{
         wgpuSurfaceGetPreferredFormat(surface, adapter)};
 #else
-    wgpu::TextureFormat swapChainFormat{WGPUTextureFormat_BGRA8Unorm};
+    // swapped value in tutorial - was producing darker hue
+    // wgpu::TextureFormat swapChainFormat{WGPUTextureFormat_BGRA8Unorm};
+    wgpu::TextureFormat swapChainFormat{wgpu::TextureFormat::BGRA8UnormSrgb};
 #endif
     swapChainDesc.format = swapChainFormat;
 
     wgpu::SwapChain swapChain{
         wgpuDeviceCreateSwapChain(device, surface, &swapChainDesc)};
-    spdlog::info("SwapChain: {}\n", (void *)swapChain);
+    spdlog::info("SwapChain: {}", (void *)swapChain);
+
+    spdlog::info("Creating shader module...");
+    const char *shaderSource = R"(
+@vertex
+fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
+    var p = vec2f(0.0, 0.0);
+    if in_vertex_index == 0u {
+        p = vec2f(-0.5, -0.5);
+    } else if in_vertex_index == 1u {
+        p = vec2f(0.5, -0.5);
+    } else {
+        p = vec2f(0.0, 0.5);
+    }
+    return vec4f(p, 0.0, 1.0);
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4f {
+    return vec4f(0.0, 0.4, 1.0, 1.0);
+}
+)";
+
+    wgpu::ShaderModuleDescriptor shaderDesc;
+#ifndef WEBGPU_BACKEND_WGPU
+    shaderDesc.hintCount = 0;
+    shaderDesc.hints = nullptr;
+#endif
+
+    wgpu::ShaderModuleWGSLDescriptor shaderCodeDesc;
+    shaderCodeDesc.chain.next = nullptr;
+    shaderCodeDesc.chain.sType = wgpu::SType::ShaderModuleWGSLDescriptor;
+    shaderDesc.nextInChain = &shaderCodeDesc.chain;
+
+    shaderCodeDesc.code = shaderSource;
+
+    wgpu::ShaderModule shaderModule{device.createShaderModule(shaderDesc)};
+    spdlog::info("Shader module: {}", (void *)shaderModule);
+
+
+    spdlog::info("Creating render pipeline...");
+    wgpu::RenderPipelineDescriptor pipelineDesc;
+
+    // Vertex fetch
+    pipelineDesc.vertex.bufferCount = 0;
+    pipelineDesc.vertex.buffers = nullptr;
+
+    // Vertex shader
+    pipelineDesc.vertex.module = shaderModule;
+    pipelineDesc.vertex.entryPoint = "vs_main";
+    pipelineDesc.vertex.constantCount = 0;
+    pipelineDesc.vertex.constants = nullptr;
+
+    // Primitive assembly and rasterization
+    // Each sequence of 3 vertices is considered as a triangle
+    pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    // When not specified, vertices are considered sequentially
+    pipelineDesc.primitive.stripIndexFormat = wgpu::IndexFormat::Undefined;
+    // Corner vertices are enumerated in anti-clockwise order
+    pipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
+    // do not hide faces pointing away
+    pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
+
+    // Fragment shader
+    wgpu::FragmentState fragmentState;
+    pipelineDesc.fragment = &fragmentState;
+    fragmentState.module = shaderModule;
+    fragmentState.entryPoint = "fs_main";
+    fragmentState.constantCount = 0;
+    fragmentState.constants = nullptr;
+
+    // Configure blend state
+    wgpu::BlendState blendState;
+    blendState.color.srcFactor = wgpu::BlendFactor::SrcAlpha;
+    blendState.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+    blendState.color.operation = wgpu::BlendOperation::Add;
+    blendState.alpha.srcFactor = wgpu::BlendFactor::Zero;
+    blendState.alpha.dstFactor = wgpu::BlendFactor::One;
+    blendState.alpha.operation = wgpu::BlendOperation::Add;
+
+    wgpu::ColorTargetState colorTarget;
+    colorTarget.format = swapChainFormat;
+    colorTarget.blend = &blendState;
+    colorTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    fragmentState.targetCount = 1;
+    fragmentState.targets = &colorTarget;
+
+    pipelineDesc.depthStencil = nullptr;
+
+    // Multi-sampling
+    // Samples per pixel
+    pipelineDesc.multisample.count = 1;
+    // Default value for the mae, meaning "all bits on"
+    pipelineDesc.multisample.mask = ~0u;
+    // Default value as well
+    pipelineDesc.multisample.alphaToCoverageEnabled = false;
+
+
+    pipelineDesc.layout = nullptr;
+
+    wgpu::RenderPipeline pipeline = device.createRenderPipeline(pipelineDesc);
+    spdlog::info("Render pipeline: {}", (void *)pipeline);
+
 
     auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void *
                               /* pUserData */) {
@@ -136,6 +255,8 @@ int main(int /*unused*/, char ** /*unused*/)
     wgpuQueueOnSubmittedWorkDone(queue,
                                  onQueueWorkDone,
                                  nullptr /*pUserData */);
+
+    glfwSetKeyCallback(window, key_callback);
 
     while (glfwWindowShouldClose(window) == 0)
     {
@@ -161,25 +282,28 @@ int main(int /*unused*/, char ** /*unused*/)
         wgpu::RenderPassColorAttachment renderPassColorAttachment{};
         renderPassColorAttachment.view = nextTexture;
         renderPassColorAttachment.resolveTarget = nullptr;
-        renderPassColorAttachment.loadOp = WGPULoadOp_Clear;
-        renderPassColorAttachment.storeOp = WGPUStoreOp_Store;
+        renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
+        renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
         renderPassColorAttachment.clearValue = wgpu::Color{0.9, 0.1, 0.2, 1.0};
         renderPassDesc.colorAttachmentCount = 1;
         renderPassDesc.colorAttachments = &renderPassColorAttachment;
 
-
         renderPassDesc.depthStencilAttachment = nullptr;
-
         renderPassDesc.timestampWriteCount = 0;
         renderPassDesc.timestampWrites = nullptr;
+        wgpu::RenderPassEncoder renderPass{
+            encoder.beginRenderPass(renderPassDesc)};
 
         renderPassDesc.nextInChain = nullptr;
 
-        wgpu::RenderPassEncoder renderPass{
-            wgpuCommandEncoderBeginRenderPass(encoder, &renderPassDesc)};
-        wgpuRenderPassEncoderEnd(renderPass);
+        encoder.beginRenderPass(renderPassDesc);
 
-        wgpuTextureViewRelease(nextTexture);
+        renderPass.setPipeline(pipeline);
+        renderPass.draw(3, 1, 0, 0);
+        renderPass.end();
+        renderPass.release();
+
+        nextTexture.release();
 
         wgpu::CommandBufferDescriptor cmdBufferDescriptor{};
         cmdBufferDescriptor.nextInChain = nullptr;

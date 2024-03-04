@@ -32,18 +32,23 @@ cpmaddpackage(
   "gh:eliemichel/glfw3webgpu#e4cd9131c7472b000641a104116c2fecf13d55a7") # v1.1.0
 cpmaddpackage("gh:gabime/spdlog#7c02e204c92545f869e2f04edaab1f19fe8b19fd"
 )# v1.13.0
-if(EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN")
-  cpmaddpackage(
-    "gh:eliemichel/WebGPU-distribution#5ece5a9ad125cb243e3e9b009d03469d663a30d4"
-  ) # emscripten
-else()
-  cpmaddpackage(
+# if(EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN") cpmaddpackage(
+# "gh:eliemichel/WebGPU-distribution#5ece5a9ad125cb243e3e9b009d03469d663a30d4" )
+# # emscripten else()
+cpmaddpackage(
+    #"gh:eliemichel/WebGPU-distribution#9e9195932a62a8e04e4279b964538b9cf13af09a"
+   # wgpu-v0.1.0
     "gh:eliemichel/WebGPU-distribution#9dd47f8515dfd7112b750da07e719460a88bf2e8"
-  ) # wgpu-5433868 (works with Swap Chain)
-  # cpmaddpackage(
-  # "gh:eliemichel/WebGPU-distribution#def06a045c3fa1478e1b1047bb81b92f97b8483d"
-  # ) # wgpu (Swap Chain removed)
-endif()
+  )# wgpu-5433868 (works with Swap Chain)
+# cpmaddpackage(
+# "gh:eliemichel/WebGPU-distribution#def06a045c3fa1478e1b1047bb81b92f97b8483d" )
+# # wgpu (Swap Chain removed) endif()
+
+#FetchContent_Declare(
+#  webgpu
+#  GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
+#  GIT_TAG 9dd47f8515dfd7112b750da07e719460a88bf2e8) # wgpu-5433868
+#FetchContent_MakeAvailable(webgpu)
 
 add_library(WebGPUUtils_lib STATIC "${PROJECT_SOURCE_DIR}/src/webgpu-utils.cpp")
 target_link_libraries(WebGPUUtils_lib spdlog webgpu learnwebgpu_compiler_flags)
