@@ -9,6 +9,8 @@
 #include <webgpu/webgpu.hpp>
 
 #include <iostream>
+#include <numeric>
+#include <vector>
 
 static void key_callback(GLFWwindow *window,
                          int key,
@@ -117,6 +119,23 @@ int main(int /*unused*/, char ** /*unused*/)
     //    surfaceConfiguration.height = kWindowHeight;
     //    surfaceConfiguration.presentMode = wgpu::PresentMode_Fifo;
     //    wgpuSurfaceConfigure(surface, &surfaceConfiguration);
+
+
+    spdlog::info("Allocating GPU memory...\n");
+
+    wgpu::BufferDescriptor bufferDesc;
+    bufferDesc.label = "Input buffer: written from the CPU to the GPU";
+    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
+    bufferDesc.size = 16;
+    bufferDesc.mappedAtCreation = false;
+    wgpu::Buffer buffer1{device.createBuffer(bufferDesc)};
+
+    wgpu::BufferDescriptor bufferDesc2;
+    bufferDesc2.label = "Output buffer: read back from the GPU to the CPU";
+    bufferDesc2.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    bufferDesc2.size = 16;
+    bufferDesc2.mappedAtCreation = false;
+    wgpu::Buffer buffer2{device.createBuffer(bufferDesc2)};
 
 
     // This Swap Chain code will need updating for latet versions - tutorial uses old version, checked 2024-02-18
@@ -256,10 +275,73 @@ fn fs_main() -> @location(0) vec4f {
                                  onQueueWorkDone,
                                  nullptr /*pUserData */);
 
+    spdlog::info("Uploading data to the GPU...\n");
+
+    std::vector<uint8_t> numbers(16);
+    // fill vector with 0,1,2...
+    std::iota(std::begin(numbers), std::end(numbers), 0);
+    queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
+
+    spdlog::info("Sending buffer copy operation...\n");
+
+    wgpu::CommandEncoder bufferCommandEncoder{
+        device.createCommandEncoder(wgpu::CommandEncoderDescriptor{})};
+    bufferCommandEncoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, 16);
+
+    wgpu::CommandBuffer command{
+        bufferCommandEncoder.finish(wgpu::CommandBufferDescriptor{})};
+    bufferCommandEncoder.release();
+    queue.submit(1, &command);
+    command.release();
+
+    spdlog::info("Start downloading result data from the GPU...");
+
+    struct Context
+    {
+        wgpu::Buffer buffer;
+    };
+    auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status,
+                              void *pUserData) {
+        Context *context = reinterpret_cast<Context *>(pUserData);
+        spdlog::info("Buffer 2 mapped with status {}\n", status);
+        if (status != wgpu::BufferMapAsyncStatus::Success)
+        {
+            return;
+        }
+
+        // Get a pointer to wherever the driver mapped the GPU memory to the RAM
+        // uint8_t *bufferData =
+        // (uint8_t *)context->buffer.getConstMappedRange(0, 16);
+        std::vector<uint8_t> bufferData;
+        bufferData.assign(
+            (uint8_t *)context->buffer.getConstMappedRange(0, 16),
+            (uint8_t *)context->buffer.getConstMappedRange(0, 16) + 16);
+
+        // Manipulate the buffer
+        auto comma_fold = [](std::string a, int b) {
+            return std::move(a) + ',' + std::to_string(b);
+        };
+        std::string collected{std::accumulate(std::next(bufferData.begin()),
+                                              bufferData.end(),
+                                              std::to_string(bufferData[0]),
+                                              comma_fold)};
+        spdlog::info("bufferData = [{}]", collected);
+        context->buffer.unmap();
+    };
+    Context context{buffer2};
+    wgpuBufferMapAsync(buffer2,
+                       wgpu::MapMode::Read,
+                       0,
+                       16,
+                       onBuffer2Mapped,
+                       (void *)&context);
+
+
     glfwSetKeyCallback(window, key_callback);
 
     while (glfwWindowShouldClose(window) == 0)
     {
+        queue.submit(0, nullptr);
         glfwPollEvents();
 
         wgpu::TextureView nextTexture{
@@ -317,11 +399,18 @@ fn fs_main() -> @location(0) vec4f {
         wgpuSwapChainPresent(swapChain);
     }
 
-    wgpuSwapChainRelease(swapChain);
-    wgpuDeviceRelease(device);
-    wgpuAdapterRelease(adapter);
-    wgpuInstanceRelease(instance);
-    wgpuSurfaceRelease(surface);
+    buffer1.destroy();
+    buffer2.destroy();
+
+    buffer1.release();
+    buffer2.release();
+
+    swapChain.release();
+    device.release();
+    adapter.release();
+    instance.release();
+    surface.release();
+
     glfwDestroyWindow(window);
     glfwTerminate();
 
