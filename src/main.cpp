@@ -40,7 +40,6 @@ int main(int /*unused*/, char ** /*unused*/)
 
     if (glfwInit() == 0)
     {
-
         spdlog::error("Could not initialise GLFW!");
         return 1;
     }
@@ -73,16 +72,37 @@ int main(int /*unused*/, char ** /*unused*/)
 
     spdlog::info("Requesting device...");
 
+    wgpu::SupportedLimits supportedLimits;
+    adapter.getLimits(&supportedLimits);
+
+    wgpu::RequiredLimits requiredLimits{wgpu::Default};
+    requiredLimits.limits.maxVertexAttributes = 1;
+    requiredLimits.limits.maxVertexBuffers = 1;
+    requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
+    requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+    requiredLimits.limits.minStorageBufferOffsetAlignment =
+        supportedLimits.limits.minStorageBufferOffsetAlignment;
+    requiredLimits.limits.minUniformBufferOffsetAlignment =
+        supportedLimits.limits.minUniformBufferOffsetAlignment;
+
     wgpu::DeviceDescriptor deviceDesc{};
     deviceDesc.nextInChain = nullptr;
     deviceDesc.label = "My Device";
     deviceDesc.requiredFeaturesCount = 0;
     //deviceDesc.requiredFeatureCount = 0; // newer version
-    deviceDesc.requiredLimits = nullptr;
+    deviceDesc.requiredLimits = &requiredLimits;
     deviceDesc.defaultQueue.nextInChain = nullptr;
     deviceDesc.defaultQueue.label = "The default queue";
-    wgpu::Device device = requestDevice(adapter, &deviceDesc);
+    wgpu::Device device = adapter.requestDevice(deviceDesc);
     spdlog::info("Got device: {}\n", (void *)device);
+
+    adapter.getLimits(&supportedLimits);
+    spdlog::info("adapter.maxVertexAttributes: {} ",
+                 supportedLimits.limits.maxVertexAttributes);
+
+    device.getLimits(&supportedLimits);
+    spdlog::info("device.maxVertexAttributes: {} ",
+                 supportedLimits.limits.maxVertexAttributes);
 
     wgpu::Queue queue = wgpuDeviceGetQueue(device);
 
@@ -120,38 +140,17 @@ int main(int /*unused*/, char ** /*unused*/)
     //    surfaceConfiguration.presentMode = wgpu::PresentMode_Fifo;
     //    wgpuSurfaceConfigure(surface, &surfaceConfiguration);
 
-
-    spdlog::info("Allocating GPU memory...\n");
-
-    wgpu::BufferDescriptor bufferDesc;
-    bufferDesc.label = "Input buffer: written from the CPU to the GPU";
-    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
-    bufferDesc.size = 16;
-    bufferDesc.mappedAtCreation = false;
-    wgpu::Buffer buffer1{device.createBuffer(bufferDesc)};
-
-    wgpu::BufferDescriptor bufferDesc2;
-    bufferDesc2.label = "Output buffer: read back from the GPU to the CPU";
-    bufferDesc2.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    bufferDesc2.size = 16;
-    bufferDesc2.mappedAtCreation = false;
-    wgpu::Buffer buffer2{device.createBuffer(bufferDesc2)};
-
-
     // This Swap Chain code will need updating for latet versions - tutorial uses old version, checked 2024-02-18
     spdlog::info("Creating swapchain device...");
 
-    wgpu::SwapChainDescriptor swapChainDesc{};
-    swapChainDesc.nextInChain = nullptr;
+    wgpu::SwapChainDescriptor swapChainDesc;
     swapChainDesc.width = kWindowWidth;
     swapChainDesc.height = kWindowHeight;
-
     swapChainDesc.usage = wgpu::TextureUsage::RenderAttachment;
     swapChainDesc.presentMode = wgpu::PresentMode::Fifo;
 
 #ifdef WGPU_BACKEND_WGPU
-    wgpu::TextureFormat swapChainFormat{
-        wgpuSurfaceGetPreferredFormat(surface, adapter)};
+    wgpu::TextureFormat swapChainFormat{surface.getPreferredFormat(adapter)};
 #else
     // swapped value in tutorial - was producing darker hue
     // wgpu::TextureFormat swapChainFormat{WGPUTextureFormat_BGRA8Unorm};
@@ -159,23 +158,14 @@ int main(int /*unused*/, char ** /*unused*/)
 #endif
     swapChainDesc.format = swapChainFormat;
 
-    wgpu::SwapChain swapChain{
-        wgpuDeviceCreateSwapChain(device, surface, &swapChainDesc)};
+    wgpu::SwapChain swapChain{device.createSwapChain(surface, swapChainDesc)};
     spdlog::info("SwapChain: {}", (void *)swapChain);
 
     spdlog::info("Creating shader module...");
     const char *shaderSource = R"(
 @vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
-    var p = vec2f(0.0, 0.0);
-    if in_vertex_index == 0u {
-        p = vec2f(-0.5, -0.5);
-    } else if in_vertex_index == 1u {
-        p = vec2f(0.5, -0.5);
-    } else {
-        p = vec2f(0.0, 0.5);
-    }
-    return vec4f(p, 0.0, 1.0);
+fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
+    return vec4f(in_vertex_position, 0.0, 1.0);
 }
 
 @fragment
@@ -200,13 +190,23 @@ fn fs_main() -> @location(0) vec4f {
     wgpu::ShaderModule shaderModule{device.createShaderModule(shaderDesc)};
     spdlog::info("Shader module: {}", (void *)shaderModule);
 
-
     spdlog::info("Creating render pipeline...");
     wgpu::RenderPipelineDescriptor pipelineDesc;
 
     // Vertex fetch
-    pipelineDesc.vertex.bufferCount = 0;
-    pipelineDesc.vertex.buffers = nullptr;
+    wgpu::VertexAttribute vertexAttrib;
+    vertexAttrib.shaderLocation = 0;
+    vertexAttrib.format = wgpu::VertexFormat::Float32x2;
+    vertexAttrib.offset = 0;
+
+    wgpu::VertexBufferLayout vertexBufferLayout;
+    vertexBufferLayout.attributeCount = 1;
+    vertexBufferLayout.attributes = &vertexAttrib;
+    vertexBufferLayout.arrayStride = 2 * sizeof(float);
+    vertexBufferLayout.stepMode = wgpu::VertexStepMode::Vertex;
+
+    pipelineDesc.vertex.bufferCount = 1;
+    pipelineDesc.vertex.buffers = &vertexBufferLayout;
 
     // Vertex shader
     pipelineDesc.vertex.module = shaderModule;
@@ -259,12 +259,43 @@ fn fs_main() -> @location(0) vec4f {
     // Default value as well
     pipelineDesc.multisample.alphaToCoverageEnabled = false;
 
-
-    pipelineDesc.layout = nullptr;
+    wgpu::PipelineLayoutDescriptor layoutDesc;
+    layoutDesc.bindGroupLayoutCount = 0;
+    layoutDesc.bindGroupLayouts = nullptr;
+    wgpu::PipelineLayout layout = device.createPipelineLayout(layoutDesc);
+    pipelineDesc.layout = layout;
 
     wgpu::RenderPipeline pipeline = device.createRenderPipeline(pipelineDesc);
     spdlog::info("Render pipeline: {}", (void *)pipeline);
 
+    // Vertex buffer
+    std::array<float, 12> vertexData{
+        -0.5F,
+        -0.5F,
+        0.5F,
+        -0.5F,
+        0.0F,
+        0.5F,
+
+        -0.55F,
+        -0.5,
+        -0.05F,
+        0.5F,
+        -0.55F,
+        0.5F,
+    };
+
+    int vertexCount{static_cast<int>(vertexData.size() / 2)};
+
+    // Create vertex buffer
+    wgpu::BufferDescriptor bufferDesc;
+    bufferDesc.size = vertexData.size() * sizeof(float);
+    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;
+    bufferDesc.mappedAtCreation = false;
+    wgpu::Buffer vertexBuffer{device.createBuffer(bufferDesc)};
+
+    // Upload geometry data to the buffer
+    queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
 
     auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void *
                               /* pUserData */) {
@@ -275,77 +306,16 @@ fn fs_main() -> @location(0) vec4f {
                                  onQueueWorkDone,
                                  nullptr /*pUserData */);
 
-    spdlog::info("Uploading data to the GPU...\n");
-
-    std::vector<uint8_t> numbers(16);
-    // fill vector with 0,1,2...
-    std::iota(std::begin(numbers), std::end(numbers), 0);
-    queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
-
-    spdlog::info("Sending buffer copy operation...\n");
-
-    wgpu::CommandEncoder bufferCommandEncoder{
-        device.createCommandEncoder(wgpu::CommandEncoderDescriptor{})};
-    bufferCommandEncoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, 16);
-
-    wgpu::CommandBuffer command{
-        bufferCommandEncoder.finish(wgpu::CommandBufferDescriptor{})};
-    bufferCommandEncoder.release();
-    queue.submit(1, &command);
-    command.release();
-
-    spdlog::info("Start downloading result data from the GPU...");
-
-    struct Context
-    {
-        wgpu::Buffer buffer;
-    };
-    auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status,
-                              void *pUserData) {
-        Context *context = reinterpret_cast<Context *>(pUserData);
-        spdlog::info("Buffer 2 mapped with status {}\n", status);
-        if (status != wgpu::BufferMapAsyncStatus::Success)
-        {
-            return;
-        }
-
-        // Get a pointer to wherever the driver mapped the GPU memory to the RAM
-        // uint8_t *bufferData =
-        // (uint8_t *)context->buffer.getConstMappedRange(0, 16);
-        std::vector<uint8_t> bufferData;
-        bufferData.assign(
-            (uint8_t *)context->buffer.getConstMappedRange(0, 16),
-            (uint8_t *)context->buffer.getConstMappedRange(0, 16) + 16);
-
-        // Manipulate the buffer
-        auto comma_fold = [](std::string a, int b) {
-            return std::move(a) + ',' + std::to_string(b);
-        };
-        std::string collected{std::accumulate(std::next(bufferData.begin()),
-                                              bufferData.end(),
-                                              std::to_string(bufferData[0]),
-                                              comma_fold)};
-        spdlog::info("bufferData = [{}]", collected);
-        context->buffer.unmap();
-    };
-    Context context{buffer2};
-    wgpuBufferMapAsync(buffer2,
-                       wgpu::MapMode::Read,
-                       0,
-                       16,
-                       onBuffer2Mapped,
-                       (void *)&context);
-
+    spdlog::info("Created");
 
     glfwSetKeyCallback(window, key_callback);
 
     while (glfwWindowShouldClose(window) == 0)
     {
-        queue.submit(0, nullptr);
+        //queue.submit(0, nullptr);
         glfwPollEvents();
 
-        wgpu::TextureView nextTexture{
-            wgpuSwapChainGetCurrentTextureView(swapChain)};
+        wgpu::TextureView nextTexture = swapChain.getCurrentTextureView();
         if (nextTexture == nullptr)
         {
             spdlog::error("Cannot acquire next swap chain texture\n");
@@ -354,10 +324,9 @@ fn fs_main() -> @location(0) vec4f {
         spdlog::info("nextTexture: {}", (void *)nextTexture);
 
         wgpu::CommandEncoderDescriptor commandEncoderDesc{};
-        commandEncoderDesc.nextInChain = nullptr;
         commandEncoderDesc.label = "Command Encoder";
         wgpu::CommandEncoder encoder{
-            wgpuDeviceCreateCommandEncoder(device, &commandEncoderDesc)};
+            device.createCommandEncoder(commandEncoderDesc)};
 
         wgpu::RenderPassDescriptor renderPassDesc{};
 
@@ -376,34 +345,26 @@ fn fs_main() -> @location(0) vec4f {
         wgpu::RenderPassEncoder renderPass{
             encoder.beginRenderPass(renderPassDesc)};
 
-        renderPassDesc.nextInChain = nullptr;
-
-        encoder.beginRenderPass(renderPassDesc);
-
         renderPass.setPipeline(pipeline);
-        renderPass.draw(3, 1, 0, 0);
+        renderPass.setVertexBuffer(0,
+                                   vertexBuffer,
+                                   0,
+                                   vertexData.size() * sizeof(float));
+        renderPass.draw(static_cast<uint32_t>(vertexCount), 1, 0, 0);
         renderPass.end();
         renderPass.release();
 
         nextTexture.release();
 
         wgpu::CommandBufferDescriptor cmdBufferDescriptor{};
-        cmdBufferDescriptor.nextInChain = nullptr;
         cmdBufferDescriptor.label = "Command buffer";
-        WGPUCommandBuffer command{
-            wgpuCommandEncoderFinish(encoder, &cmdBufferDescriptor)};
-        wgpuCommandEncoderRelease(encoder);
-        wgpuQueueSubmit(queue, 1, &command);
-        wgpuCommandBufferRelease(command);
+        wgpu::CommandBuffer command{encoder.finish(cmdBufferDescriptor)};
+        encoder.release();
+        queue.submit(command);
+        command.release();
 
-        wgpuSwapChainPresent(swapChain);
+        swapChain.present();
     }
-
-    buffer1.destroy();
-    buffer2.destroy();
-
-    buffer1.release();
-    buffer2.release();
 
     swapChain.release();
     device.release();
