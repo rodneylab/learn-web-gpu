@@ -150,7 +150,6 @@ void inspectAdapter(WGPUAdapter adapter)
                      limits.limits.maxComputeWorkgroupsPerDimension);
     }
 
-
     WGPUAdapterProperties properties{};
     properties.nextInChain = nullptr;
     wgpuAdapterGetProperties(adapter, &properties);
