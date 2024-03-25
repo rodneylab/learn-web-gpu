@@ -8,6 +8,7 @@
 
 #include <webgpu/webgpu.hpp>
 
+#include <array>
 #include <iostream>
 #include <numeric>
 #include <vector>
