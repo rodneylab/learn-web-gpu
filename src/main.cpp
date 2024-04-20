@@ -77,14 +77,15 @@ int main(int /*unused*/, char ** /*unused*/)
     adapter.getLimits(&supportedLimits);
 
     wgpu::RequiredLimits requiredLimits{wgpu::Default};
-    requiredLimits.limits.maxVertexAttributes = 1;
+    requiredLimits.limits.maxVertexAttributes = 2;
     requiredLimits.limits.maxVertexBuffers = 1;
-    requiredLimits.limits.maxBufferSize = 6 * 2 * sizeof(float);
-    requiredLimits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+    requiredLimits.limits.maxBufferSize = 6 * 5 * sizeof(float);
+    requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
     requiredLimits.limits.minStorageBufferOffsetAlignment =
         supportedLimits.limits.minStorageBufferOffsetAlignment;
     requiredLimits.limits.minUniformBufferOffsetAlignment =
         supportedLimits.limits.minUniformBufferOffsetAlignment;
+    requiredLimits.limits.maxInterStageShaderComponents = 3;
 
     wgpu::DeviceDescriptor deviceDesc{};
     deviceDesc.nextInChain = nullptr;
@@ -164,14 +165,27 @@ int main(int /*unused*/, char ** /*unused*/)
 
     spdlog::info("Creating shader module...");
     const char *shaderSource = R"(
+struct VertexInput {
+    @location(0) position: vec2f,
+    @location(1) color: vec3f,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec3f,
+};
+
 @vertex
-fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
-    return vec4f(in_vertex_position, 0.0, 1.0);
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4f(in.position, 0.0, 1.0);
+    out.color = in.color;
+    return out;
 }
 
 @fragment
-fn fs_main() -> @location(0) vec4f {
-    return vec4f(0.0, 0.4, 1.0, 1.0);
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    return vec4f(in.color, 1.0);
 }
 )";
 
@@ -195,15 +209,23 @@ fn fs_main() -> @location(0) vec4f {
     wgpu::RenderPipelineDescriptor pipelineDesc;
 
     // Vertex fetch
-    wgpu::VertexAttribute vertexAttrib;
-    vertexAttrib.shaderLocation = 0;
-    vertexAttrib.format = wgpu::VertexFormat::Float32x2;
-    vertexAttrib.offset = 0;
+    std::vector<wgpu::VertexAttribute> vertexAttribs(2);
+
+    // Position attribute
+    vertexAttribs[0].shaderLocation = 0;
+    vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
+    vertexAttribs[0].offset = 0;
+
+    // Colour attribute
+    vertexAttribs[1].shaderLocation = 1;
+    vertexAttribs[1].format = wgpu::VertexFormat::Float32x3;
+    vertexAttribs[1].offset = 2 * sizeof(float);
 
     wgpu::VertexBufferLayout vertexBufferLayout;
-    vertexBufferLayout.attributeCount = 1;
-    vertexBufferLayout.attributes = &vertexAttrib;
-    vertexBufferLayout.arrayStride = 2 * sizeof(float);
+    vertexBufferLayout.attributeCount =
+        static_cast<uint32_t>(vertexAttribs.size());
+    vertexBufferLayout.attributes = vertexAttribs.data();
+    vertexBufferLayout.arrayStride = 5 * sizeof(float);
     vertexBufferLayout.stepMode = wgpu::VertexStepMode::Vertex;
 
     pipelineDesc.vertex.bufferCount = 1;
@@ -270,23 +292,12 @@ fn fs_main() -> @location(0) vec4f {
     spdlog::info("Render pipeline: {}", (void *)pipeline);
 
     // Vertex buffer
-    std::array<float, 12> vertexData{
-        -0.5F,
-        -0.5F,
-        0.5F,
-        -0.5F,
-        0.0F,
-        0.5F,
+    std::array<float, 30> vertexData{
+        -0.5F,  -0.5F, 1.F, 0.F, 0.F, 0.5F,   -0.5F, 0.F, 1.F, 0.F,
+        0.0F,   0.5F,  0.F, 0.F, 1.F, -0.55F, -0.5,  1.F, 1.F, 0.F,
+        -0.05F, 0.5F,  1.F, 0.F, 1.F, -0.55F, 0.5F,  0.F, 1.F, 1.F};
 
-        -0.55F,
-        -0.5,
-        -0.05F,
-        0.5F,
-        -0.55F,
-        0.5F,
-    };
-
-    int vertexCount{static_cast<int>(vertexData.size() / 2)};
+    int vertexCount{static_cast<int>(vertexData.size() / 5)};
 
     // Create vertex buffer
     wgpu::BufferDescriptor bufferDesc;
@@ -336,7 +347,9 @@ fn fs_main() -> @location(0) vec4f {
         renderPassColorAttachment.resolveTarget = nullptr;
         renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
         renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
-        renderPassColorAttachment.clearValue = wgpu::Color{0.9, 0.1, 0.2, 1.0};
+        //renderPassColorAttachment.clearValue = wgpu::Color{0.9, 0.1, 0.2, 1.0};
+        renderPassColorAttachment.clearValue =
+            wgpu::Color{0.05, 0.05, 0.05, 1.0};
         renderPassDesc.colorAttachmentCount = 1;
         renderPassDesc.colorAttachments = &renderPassColorAttachment;
 
