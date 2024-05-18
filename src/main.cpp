@@ -13,6 +13,16 @@
 #include <numeric>
 #include <vector>
 
+auto format_as(WGPUErrorType error_type)
+{
+    return fmt::underlying(error_type);
+}
+
+auto format_as(WGPUQueueWorkDoneStatus status)
+{
+    return fmt::underlying(status);
+}
+
 static void key_callback(GLFWwindow *window,
                          int key,
                          int /* scancode */,

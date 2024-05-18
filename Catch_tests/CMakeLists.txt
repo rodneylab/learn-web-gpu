@@ -1,5 +1,6 @@
-cpmaddpackage("gh:catchorg/Catch2#05e10dfccc28c7f973727c54f850237d07d5e10f"
-)# v3.5.2
+message(STATUS "Include Catch2")
+cpmaddpackage("gh:catchorg/Catch2#4e8d92bf02f7d1c8006a0e7a5ecabd8e62d98502"
+)# v3.6.0
 
 add_executable(Catch_tests_run test.cpp)
 
