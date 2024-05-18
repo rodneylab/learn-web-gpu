@@ -7,6 +7,21 @@
 #include <iostream>
 #include <vector>
 
+auto format_as(WGPUAdapterType adapter_type)
+{
+    return fmt::underlying(adapter_type);
+}
+
+auto format_as(WGPUBackendType backend_type)
+{
+    return fmt::underlying(backend_type);
+}
+
+auto format_as(WGPUFeatureName feature_name)
+{
+    return fmt::underlying(feature_name);
+}
+
 WGPUAdapter requestAdapter(WGPUInstance instance,
                            WGPURequestAdapterOptions const *options)
 {
