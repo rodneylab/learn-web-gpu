@@ -34,30 +34,13 @@ cpmaddpackage(
 message(STATUS "Include spdlog")
 cpmaddpackage("gh:gabime/spdlog#27cb4c76708608465c413f6d0e6b8d99a4d84302"
 )# v1.14.1
-# if(EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN")
-# cpmaddpackage(
-# "gh:eliemichel/WebGPU-distribution#5ece5a9ad125cb243e3e9b009d03469d663a30d4" )
-# # emscripten else()
 message(STATUS "Include WebGPU-distribution")
 cpmaddpackage(
-  # "gh:eliemichel/WebGPU-distribution#9e9195932a62a8e04e4279b964538b9cf13af09a"
-  # wgpu-v0.1.0
-  "gh:eliemichel/WebGPU-distribution#9dd47f8515dfd7112b750da07e719460a88bf2e8"
-)# wgpu-5433868 (works with Swap Chain)
-# cpmaddpackage(
-# "gh:eliemichel/WebGPU-distribution#def06a045c3fa1478e1b1047bb81b92f97b8483d" )
-# # wgpu (Swap Chain removed) endif()
-
-# FetchContent_Declare( webgpu GIT_REPOSITORY
-# https://github.com/eliemichel/WebGPU-distribution GIT_TAG
-# 9dd47f8515dfd7112b750da07e719460a88bf2e8) # wgpu-5433868
-# FetchContent_MakeAvailable(webgpu)
-
-add_library(WebGPUUtils_lib STATIC "${PROJECT_SOURCE_DIR}/src/webgpu-utils.cpp")
-target_link_libraries(WebGPUUtils_lib spdlog webgpu learnwebgpu_compiler_flags)
+  "gh:eliemichel/WebGPU-distribution#b763f1277733bf5ccc07202f7ab51ad1fdb64453")
+# wgpu-v0.19.4.1
 
 add_executable(App src/main.cpp)
-target_link_libraries(App PUBLIC WebGPUUtils_lib glfw spdlog webgpu glfw3webgpu
+target_link_libraries(App PUBLIC glfw spdlog webgpu glfw3webgpu
                                  learnwebgpu_compiler_flags)
 
 if(XCODE)
