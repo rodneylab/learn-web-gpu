@@ -49,13 +49,13 @@ public:
     bool IsRunning();
 
 private:
-    wgpu::TextureView GetNextSurfaceTextureView();
+    std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
 
-    GLFWwindow *window;
+    GLFWwindow *window{nullptr};
     std::optional<wgpu::Device> device{std::nullopt};
     std::optional<wgpu::Queue> queue{std::nullopt};
     std::optional<wgpu::Surface> surface{std::nullopt};
-    std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
+    std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle{nullptr};
 };
 
 int main()
@@ -215,8 +215,8 @@ void Application::MainLoop()
     glfwPollEvents();
 
     // Get the next target texture view
-    wgpu::TextureView targetView = GetNextSurfaceTextureView();
-    if (!targetView)
+    std::optional<wgpu::TextureView> target_view{GetNextSurfaceTextureView()};
+    if (!target_view.has_value())
     {
         return;
     }
@@ -232,7 +232,7 @@ void Application::MainLoop()
 
     // The attachment part of the render pass descriptor describes the target texture of the pass
     wgpu::RenderPassColorAttachment renderPassColorAttachment = {};
-    renderPassColorAttachment.view = targetView;
+    renderPassColorAttachment.view = target_view.value();
     renderPassColorAttachment.resolveTarget = nullptr;
     renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
     renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
@@ -263,7 +263,7 @@ void Application::MainLoop()
     spdlog::info("Command submitted.");
 
     // At the end of the frame
-    targetView.release();
+    target_view.value().release();
 #ifndef __EMSCRIPTEN__
     surface.value().present();
 #endif
@@ -280,14 +280,14 @@ bool Application::IsRunning()
     return !glfwWindowShouldClose(window);
 }
 
-wgpu::TextureView Application::GetNextSurfaceTextureView()
+std::optional<wgpu::TextureView> Application::GetNextSurfaceTextureView()
 {
     // Get the surface texture
     wgpu::SurfaceTexture surfaceTexture;
     surface.value().getCurrentTexture(&surfaceTexture);
     if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::Success)
     {
-        return nullptr;
+        return std::nullopt;
     }
     wgpu::Texture texture{surfaceTexture.texture};
 
