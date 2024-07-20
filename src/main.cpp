@@ -1,5 +1,3 @@
-#include "webgpu-utils.h"
-
 #include <GLFW/glfw3.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
@@ -8,9 +6,16 @@
 
 #include <webgpu/webgpu.hpp>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #include <array>
 #include <iostream>
+#include <memory>
 #include <numeric>
+#include <optional>
+#include <utility>
 #include <vector>
 
 auto format_as(WGPUErrorType error_type)
@@ -18,9 +23,66 @@ auto format_as(WGPUErrorType error_type)
     return fmt::underlying(error_type);
 }
 
+auto format_as(WGPUDeviceLostReason reason)
+{
+    return fmt::underlying(reason);
+}
+
 auto format_as(WGPUQueueWorkDoneStatus status)
 {
     return fmt::underlying(status);
+}
+
+class Application
+{
+public:
+    // Initialise everything and return true if it all went well
+    bool Initialise();
+
+    // Free everything that was initialised
+    void Terminate();
+
+    // Draw a frame and handle events
+    void MainLoop();
+
+    // Return true while we require the main loop to remain running
+    bool IsRunning();
+
+private:
+    wgpu::TextureView GetNextSurfaceTextureView();
+
+    GLFWwindow *window;
+    std::optional<wgpu::Device> device{std::nullopt};
+    std::optional<wgpu::Queue> queue{std::nullopt};
+    std::optional<wgpu::Surface> surface{std::nullopt};
+    std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
+};
+
+int main()
+{
+    Application app;
+
+    if (!app.Initialise())
+    {
+        spdlog::error("Could not initialise WGPU!");
+        return 1;
+    }
+
+#ifdef __EMSCRIPTEN__
+    // Equivalent of the main loop when using Emscripten
+    auto callback = [](void *arg) {
+        Application *pApp = reinterpret_cast<Application *>(arg);
+        pApp->MainLoop();
+    };
+    emscripten_set_main_loop_arg(callback, &app, 0, true);
+#else  // __EMSCRIPTEN__
+    while (app.IsRunning())
+    {
+        app.MainLoop();
+    }
+#endif // __EMSCRIPTEN__
+
+    return 0;
 }
 
 static void key_callback(GLFWwindow *window,
@@ -35,369 +97,211 @@ static void key_callback(GLFWwindow *window,
     }
 }
 
-int main(int /*unused*/, char ** /*unused*/)
+bool Application::Initialise()
 {
-    wgpu::InstanceDescriptor desc = {};
-    desc.nextInChain = nullptr;
-    wgpu::Instance instance{wgpuCreateInstance(&desc)};
-
-    if (instance == nullptr)
-    {
-        spdlog::error("Could not initialise WGPU!");
-        return 1;
-    }
-
-    spdlog::info("WGPU instance: {}", (void *)instance);
-
-    if (glfwInit() == 0)
-    {
-        spdlog::error("Could not initialise GLFW!");
-        return 1;
-    }
-
+    // Open window
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     constexpr int kWindowWidth{640};
     constexpr int kWindowHeight{480};
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow *window = glfwCreateWindow(kWindowWidth,
-                                          kWindowHeight,
-                                          "Learn WebGPU",
-                                          nullptr,
-                                          nullptr);
-    if (window == nullptr)
-    {
-        spdlog::error("[ ERROR ] Could not open window!");
-        glfwTerminate();
-        return 1;
-    }
+    window = glfwCreateWindow(kWindowWidth,
+                              kWindowHeight,
+                              "Learn WebGPU",
+                              nullptr,
+                              nullptr);
+
+    wgpu::Instance instance{wgpuCreateInstance(nullptr)};
+
+    surface = glfwGetWGPUSurface(instance, window);
 
     spdlog::info("Requesting adapter...");
-    // Utility function provided by glfw3webgpu.h
-    wgpu::Surface surface = glfwGetWGPUSurface(instance, window);
+    surface = glfwGetWGPUSurface(instance, window);
     wgpu::RequestAdapterOptions adapterOpts = {};
-    adapterOpts.nextInChain = nullptr;
-    adapterOpts.compatibleSurface = surface;
-    wgpu::Adapter adapter = requestAdapter(instance, &adapterOpts);
+    adapterOpts.compatibleSurface = surface.value();
+    wgpu::Adapter adapter{instance.requestAdapter(adapterOpts)};
     spdlog::info("Got adapter: {}", (void *)adapter);
 
-    inspectAdapter(adapter);
+    instance.release();
 
     spdlog::info("Requesting device...");
-
-    wgpu::SupportedLimits supportedLimits;
-    adapter.getLimits(&supportedLimits);
-
-    wgpu::RequiredLimits requiredLimits{wgpu::Default};
-    requiredLimits.limits.maxVertexAttributes = 2;
-    requiredLimits.limits.maxVertexBuffers = 1;
-    requiredLimits.limits.maxBufferSize = 6 * 5 * sizeof(float);
-    requiredLimits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
-    requiredLimits.limits.minStorageBufferOffsetAlignment =
-        supportedLimits.limits.minStorageBufferOffsetAlignment;
-    requiredLimits.limits.minUniformBufferOffsetAlignment =
-        supportedLimits.limits.minUniformBufferOffsetAlignment;
-    requiredLimits.limits.maxInterStageShaderComponents = 3;
-
-    wgpu::DeviceDescriptor deviceDesc{};
-    deviceDesc.nextInChain = nullptr;
+    wgpu::DeviceDescriptor deviceDesc = {};
     deviceDesc.label = "My Device";
-    deviceDesc.requiredFeaturesCount = 0;
-    //deviceDesc.requiredFeatureCount = 0; // newer version
-    deviceDesc.requiredLimits = &requiredLimits;
+    deviceDesc.requiredFeatureCount = 0;
+    deviceDesc.requiredLimits = nullptr;
     deviceDesc.defaultQueue.nextInChain = nullptr;
     deviceDesc.defaultQueue.label = "The default queue";
-    wgpu::Device device = adapter.requestDevice(deviceDesc);
-    spdlog::info("Got device: {}\n", (void *)device);
+    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason,
+                                       char const *message,
+                                       void * /* pUserData */) {
+        if (message)
+        {
+            spdlog::info("Device lost: reason: {} ({})", reason, message);
+        }
+        else
+        {
+            spdlog::info("Device lost: reason: {}", reason);
+        }
+    };
+    device = std::optional<wgpu::Device>{adapter.requestDevice(deviceDesc)};
+    spdlog::info("Got device: {}\n", (void *)device.value());
 
-    adapter.getLimits(&supportedLimits);
-    spdlog::info("adapter.maxVertexAttributes: {} ",
-                 supportedLimits.limits.maxVertexAttributes);
-
-    device.getLimits(&supportedLimits);
-    spdlog::info("device.maxVertexAttributes: {} ",
-                 supportedLimits.limits.maxVertexAttributes);
-
-    wgpu::Queue queue = wgpuDeviceGetQueue(device);
-
-    auto onDeviceError =
-        [](WGPUErrorType type, char const *message, void * /* pUserData */) {
-            if (message != nullptr)
+    uncapturedErrorCallbackHandle = device.value().setUncapturedErrorCallback(
+        [](WGPUErrorType type, char const *message) {
+            if (message)
             {
-                spdlog::error("Uncaptured device error: type {} ({})",
-                              type,
-                              message);
+                spdlog::info("Uncaptured device error: type {} ({})",
+                             type,
+                             message);
             }
             else
             {
-                spdlog::error("Uncaptured device error: type {}", type);
+                spdlog::info("Uncaptured device error: type {}", type);
             }
-        };
-    wgpuDeviceSetUncapturedErrorCallback(device,
-                                         onDeviceError,
-                                         nullptr /* pUserData */);
+        });
 
-    inspectDevice(device);
+    queue = device.value().getQueue();
 
-    //    For use with newer version, from which Swap Chain has been removed
-    //    wgpu::SurfaceConfiguration surfaceConfiguration{};
-    //    surfaceConfiguration.nextInChain = nullptr;
-    //    surfaceConfiguration.device = device;
-    //    surfaceConfiguration.format =
-    //        wgpuSurfaceGetPreferredFormat(surface, adapter);
-    //    surfaceConfiguration.usage = wgpu::TextureUsage_RenderAttachment;
-    //    surfaceConfiguration.viewFormatCount = 0;
-    //    surfaceConfiguration.viewFormats = nullptr;
-    //    surfaceConfiguration.alphaMode = wgpu::CompositeAlphaMode_Auto;
-    //    surfaceConfiguration.width = kWindowWidth;
-    //    surfaceConfiguration.height = kWindowHeight;
-    //    surfaceConfiguration.presentMode = wgpu::PresentMode_Fifo;
-    //    wgpuSurfaceConfigure(surface, &surfaceConfiguration);
+    // Configure the surface
+    wgpu::SurfaceConfiguration config = {};
+    config.width = kWindowWidth;
+    config.height = kWindowHeight;
+    config.usage = wgpu::TextureUsage::RenderAttachment;
+    wgpu::TextureFormat surfaceFormat =
+        surface.value().getPreferredFormat(adapter);
+    config.format = surfaceFormat;
 
-    // This Swap Chain code will need updating for latet versions - tutorial uses old version, checked 2024-02-18
-    spdlog::info("Creating swapchain device...");
+    // we do not need any particular view format
+    config.viewFormatCount = 0;
+    config.viewFormats = nullptr;
+    config.device = device.value();
+    config.presentMode = wgpu::PresentMode::Fifo;
+    config.alphaMode = wgpu::CompositeAlphaMode::Auto;
 
-    wgpu::SwapChainDescriptor swapChainDesc;
-    swapChainDesc.width = kWindowWidth;
-    swapChainDesc.height = kWindowHeight;
-    swapChainDesc.usage = wgpu::TextureUsage::RenderAttachment;
-    swapChainDesc.presentMode = wgpu::PresentMode::Fifo;
+    surface.value().configure(config);
 
-#ifdef WGPU_BACKEND_WGPU
-    wgpu::TextureFormat swapChainFormat{surface.getPreferredFormat(adapter)};
-#else
-    // swapped value in tutorial - was producing darker hue
-    // wgpu::TextureFormat swapChainFormat{WGPUTextureFormat_BGRA8Unorm};
-    wgpu::TextureFormat swapChainFormat{wgpu::TextureFormat::BGRA8UnormSrgb};
-#endif
-    swapChainDesc.format = swapChainFormat;
-
-    wgpu::SwapChain swapChain{device.createSwapChain(surface, swapChainDesc)};
-    spdlog::info("SwapChain: {}", (void *)swapChain);
-
-    spdlog::info("Creating shader module...");
-    const char *shaderSource = R"(
-struct VertexInput {
-    @location(0) position: vec2f,
-    @location(1) color: vec3f,
-};
-
-struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec3f,
-};
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    out.position = vec4f(in.position, 0.0, 1.0);
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    return vec4f(in.color, 1.0);
-}
-)";
-
-    wgpu::ShaderModuleDescriptor shaderDesc;
-#ifndef WEBGPU_BACKEND_WGPU
-    shaderDesc.hintCount = 0;
-    shaderDesc.hints = nullptr;
-#endif
-
-    wgpu::ShaderModuleWGSLDescriptor shaderCodeDesc;
-    shaderCodeDesc.chain.next = nullptr;
-    shaderCodeDesc.chain.sType = wgpu::SType::ShaderModuleWGSLDescriptor;
-    shaderDesc.nextInChain = &shaderCodeDesc.chain;
-
-    shaderCodeDesc.code = shaderSource;
-
-    wgpu::ShaderModule shaderModule{device.createShaderModule(shaderDesc)};
-    spdlog::info("Shader module: {}", (void *)shaderModule);
-
-    spdlog::info("Creating render pipeline...");
-    wgpu::RenderPipelineDescriptor pipelineDesc;
-
-    // Vertex fetch
-    std::vector<wgpu::VertexAttribute> vertexAttribs(2);
-
-    // Position attribute
-    vertexAttribs[0].shaderLocation = 0;
-    vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
-    vertexAttribs[0].offset = 0;
-
-    // Colour attribute
-    vertexAttribs[1].shaderLocation = 1;
-    vertexAttribs[1].format = wgpu::VertexFormat::Float32x3;
-    vertexAttribs[1].offset = 2 * sizeof(float);
-
-    wgpu::VertexBufferLayout vertexBufferLayout;
-    vertexBufferLayout.attributeCount =
-        static_cast<uint32_t>(vertexAttribs.size());
-    vertexBufferLayout.attributes = vertexAttribs.data();
-    vertexBufferLayout.arrayStride = 5 * sizeof(float);
-    vertexBufferLayout.stepMode = wgpu::VertexStepMode::Vertex;
-
-    pipelineDesc.vertex.bufferCount = 1;
-    pipelineDesc.vertex.buffers = &vertexBufferLayout;
-
-    // Vertex shader
-    pipelineDesc.vertex.module = shaderModule;
-    pipelineDesc.vertex.entryPoint = "vs_main";
-    pipelineDesc.vertex.constantCount = 0;
-    pipelineDesc.vertex.constants = nullptr;
-
-    // Primitive assembly and rasterization
-    // Each sequence of 3 vertices is considered as a triangle
-    pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-    // When not specified, vertices are considered sequentially
-    pipelineDesc.primitive.stripIndexFormat = wgpu::IndexFormat::Undefined;
-    // Corner vertices are enumerated in anti-clockwise order
-    pipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
-    // do not hide faces pointing away
-    pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
-
-    // Fragment shader
-    wgpu::FragmentState fragmentState;
-    pipelineDesc.fragment = &fragmentState;
-    fragmentState.module = shaderModule;
-    fragmentState.entryPoint = "fs_main";
-    fragmentState.constantCount = 0;
-    fragmentState.constants = nullptr;
-
-    // Configure blend state
-    wgpu::BlendState blendState;
-    blendState.color.srcFactor = wgpu::BlendFactor::SrcAlpha;
-    blendState.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-    blendState.color.operation = wgpu::BlendOperation::Add;
-    blendState.alpha.srcFactor = wgpu::BlendFactor::Zero;
-    blendState.alpha.dstFactor = wgpu::BlendFactor::One;
-    blendState.alpha.operation = wgpu::BlendOperation::Add;
-
-    wgpu::ColorTargetState colorTarget;
-    colorTarget.format = swapChainFormat;
-    colorTarget.blend = &blendState;
-    colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-    fragmentState.targetCount = 1;
-    fragmentState.targets = &colorTarget;
-
-    pipelineDesc.depthStencil = nullptr;
-
-    // Multi-sampling
-    // Samples per pixel
-    pipelineDesc.multisample.count = 1;
-    // Default value for the mae, meaning "all bits on"
-    pipelineDesc.multisample.mask = ~0u;
-    // Default value as well
-    pipelineDesc.multisample.alphaToCoverageEnabled = false;
-
-    wgpu::PipelineLayoutDescriptor layoutDesc;
-    layoutDesc.bindGroupLayoutCount = 0;
-    layoutDesc.bindGroupLayouts = nullptr;
-    wgpu::PipelineLayout layout = device.createPipelineLayout(layoutDesc);
-    pipelineDesc.layout = layout;
-
-    wgpu::RenderPipeline pipeline = device.createRenderPipeline(pipelineDesc);
-    spdlog::info("Render pipeline: {}", (void *)pipeline);
-
-    // Vertex buffer
-    std::array<float, 30> vertexData{
-        -0.5F,  -0.5F, 1.F, 0.F, 0.F, 0.5F,   -0.5F, 0.F, 1.F, 0.F,
-        0.0F,   0.5F,  0.F, 0.F, 1.F, -0.55F, -0.5,  1.F, 1.F, 0.F,
-        -0.05F, 0.5F,  1.F, 0.F, 1.F, -0.55F, 0.5F,  0.F, 1.F, 1.F};
-
-    int vertexCount{static_cast<int>(vertexData.size() / 5)};
-
-    // Create vertex buffer
-    wgpu::BufferDescriptor bufferDesc;
-    bufferDesc.size = vertexData.size() * sizeof(float);
-    bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;
-    bufferDesc.mappedAtCreation = false;
-    wgpu::Buffer vertexBuffer{device.createBuffer(bufferDesc)};
-
-    // Upload geometry data to the buffer
-    queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
-
-    auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void *
-                              /* pUserData */) {
-        spdlog::info("Queued work finished with status: {}\n", status);
-    };
-
-    wgpuQueueOnSubmittedWorkDone(queue,
-                                 onQueueWorkDone,
-                                 nullptr /*pUserData */);
-
-    spdlog::info("Created");
+    // Release the adapter only after we have fully initialised it
+    adapter.release();
 
     glfwSetKeyCallback(window, key_callback);
 
-    while (glfwWindowShouldClose(window) == 0)
+    return true;
+}
+
+void Application::Terminate()
+{
+    if (surface.has_value())
     {
-        //queue.submit(0, nullptr);
-        glfwPollEvents();
-
-        wgpu::TextureView nextTexture = swapChain.getCurrentTextureView();
-        if (nextTexture == nullptr)
-        {
-            spdlog::error("Cannot acquire next swap chain texture\n");
-            break;
-        }
-        spdlog::info("nextTexture: {}", (void *)nextTexture);
-
-        wgpu::CommandEncoderDescriptor commandEncoderDesc{};
-        commandEncoderDesc.label = "Command Encoder";
-        wgpu::CommandEncoder encoder{
-            device.createCommandEncoder(commandEncoderDesc)};
-
-        wgpu::RenderPassDescriptor renderPassDesc{};
-
-        wgpu::RenderPassColorAttachment renderPassColorAttachment{};
-        renderPassColorAttachment.view = nextTexture;
-        renderPassColorAttachment.resolveTarget = nullptr;
-        renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
-        renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
-        //renderPassColorAttachment.clearValue = wgpu::Color{0.9, 0.1, 0.2, 1.0};
-        renderPassColorAttachment.clearValue =
-            wgpu::Color{0.05, 0.05, 0.05, 1.0};
-        renderPassDesc.colorAttachmentCount = 1;
-        renderPassDesc.colorAttachments = &renderPassColorAttachment;
-
-        renderPassDesc.depthStencilAttachment = nullptr;
-        renderPassDesc.timestampWriteCount = 0;
-        renderPassDesc.timestampWrites = nullptr;
-        wgpu::RenderPassEncoder renderPass{
-            encoder.beginRenderPass(renderPassDesc)};
-
-        renderPass.setPipeline(pipeline);
-        renderPass.setVertexBuffer(0,
-                                   vertexBuffer,
-                                   0,
-                                   vertexData.size() * sizeof(float));
-        renderPass.draw(static_cast<uint32_t>(vertexCount), 1, 0, 0);
-        renderPass.end();
-        renderPass.release();
-
-        nextTexture.release();
-
-        wgpu::CommandBufferDescriptor cmdBufferDescriptor{};
-        cmdBufferDescriptor.label = "Command buffer";
-        wgpu::CommandBuffer command{encoder.finish(cmdBufferDescriptor)};
-        encoder.release();
-        queue.submit(command);
-        command.release();
-
-        swapChain.present();
+        surface.value().unconfigure();
     }
-
-    swapChain.release();
-    device.release();
-    adapter.release();
-    instance.release();
-    surface.release();
-
+    if (queue.has_value())
+    {
+        queue.value().release();
+    }
+    if (surface.has_value())
+    {
+        surface.value().release();
+    }
+    if (device.has_value())
+    {
+        device.value().release();
+    }
     glfwDestroyWindow(window);
     glfwTerminate();
+}
 
-    return 0;
+void Application::MainLoop()
+{
+    glfwPollEvents();
+
+    // Get the next target texture view
+    wgpu::TextureView targetView = GetNextSurfaceTextureView();
+    if (!targetView)
+    {
+        return;
+    }
+
+    // Create a command encoder for the draw cell
+    wgpu::CommandEncoderDescriptor encoderDesc = {};
+    encoderDesc.label = "My command encoder";
+    wgpu::CommandEncoder encoder =
+        wgpuDeviceCreateCommandEncoder(device.value(), &encoderDesc);
+
+    // Create the render pass that clears the screen with our colour
+    wgpu::RenderPassDescriptor renderPassDesc = {};
+
+    // The attachment part of the render pass descriptor describes the target texture of the pass
+    wgpu::RenderPassColorAttachment renderPassColorAttachment = {};
+    renderPassColorAttachment.view = targetView;
+    renderPassColorAttachment.resolveTarget = nullptr;
+    renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
+    renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
+    renderPassColorAttachment.clearValue = WGPUColor{0.9, 0.1, 0.2, 1.0};
+#ifndef WEBGPU_BACKEND_WGPU
+    renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
+
+    renderPassDesc.colorAttachmentCount = 1;
+    renderPassDesc.colorAttachments = &renderPassColorAttachment;
+    renderPassDesc.depthStencilAttachment = nullptr;
+    renderPassDesc.timestampWrites = nullptr;
+
+    // Create the render pass and end it immediately )we only clear the screen, and do not draw anything)
+    wgpu::RenderPassEncoder renderPass{encoder.beginRenderPass(renderPassDesc)};
+    renderPass.end();
+    renderPass.release();
+
+    // Finally encode and submit the render pass
+    wgpu::CommandBufferDescriptor cmdBufferDescriptor = {};
+    cmdBufferDescriptor.label = "Command buffer";
+    wgpu::CommandBuffer command = encoder.finish(cmdBufferDescriptor);
+    encoder.release();
+
+    spdlog::info("Submitting command...");
+    queue.value().submit(1, &command);
+    command.release();
+    spdlog::info("Command submitted.");
+
+    // At the end of the frame
+    targetView.release();
+#ifndef __EMSCRIPTEN__
+    surface.value().present();
+#endif
+
+#if defined(WEBGPU_BACKEND_DAWN)
+    wgpuDeviceTick(device.value());
+#elif defined(WEBGPU_BACKEND_WGPU)
+    wgpuDevicePoll(device.value(), false, nullptr);
+#endif
+}
+
+bool Application::IsRunning()
+{
+    return !glfwWindowShouldClose(window);
+}
+
+wgpu::TextureView Application::GetNextSurfaceTextureView()
+{
+    // Get the surface texture
+    wgpu::SurfaceTexture surfaceTexture;
+    surface.value().getCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::Success)
+    {
+        return nullptr;
+    }
+    wgpu::Texture texture{surfaceTexture.texture};
+
+    // Create a view for this surface texture
+    wgpu::TextureViewDescriptor viewDescriptor;
+    viewDescriptor.label = "Surface texture view";
+    viewDescriptor.format = texture.getFormat();
+    viewDescriptor.dimension = wgpu::TextureViewDimension::_2D;
+    viewDescriptor.baseMipLevel = 0;
+    viewDescriptor.mipLevelCount = 1;
+    viewDescriptor.baseArrayLayer = 0;
+    viewDescriptor.arrayLayerCount = 1;
+    viewDescriptor.aspect = wgpu::TextureAspect::All;
+    wgpu::TextureView targetView = texture.createView(viewDescriptor);
+
+    return targetView;
 }
