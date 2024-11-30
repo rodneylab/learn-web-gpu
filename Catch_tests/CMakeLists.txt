@@ -1,6 +1,5 @@
-message(STATUS "Include Catch2")
-cpmaddpackage("gh:catchorg/Catch2#4e8d92bf02f7d1c8006a0e7a5ecabd8e62d98502"
-)# v3.6.0
+include(${PROJECT_SOURCE_DIR}/DevDependencies.cmake)
+learnwebgpu_setup_dev_dependencies()
 
 add_executable(Catch_tests_run test.cpp)
 

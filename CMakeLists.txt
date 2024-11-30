@@ -18,30 +18,24 @@ target_compile_options(
     "$<${gcc_like_cxx}:$<BUILD_INTERFACE:-pedantic-errors;-Werror;-Wall;-Weffc++;-Wextra;-Wconversion;-Wsign-conversion>>"
     "$<${msvc_cxx}:$<BUILD_INTERFACE:-W4>>")
 
+include(cmake/StaticAnalysers.cmake)
+enable_clang_tidy()
+
 set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${PROJECT_SOURCE_DIR}/cmake")
 option(RUN_TESTS "Enable tests" ON)
 include(coverage)
 add_coverage_target("Catch_tests/*")
 
 include(utils.cmake)
-include(cmake/CPM.cmake)
 
-message(STATUS "Include GLFW")
-cpmaddpackage("gh:glfw/glfw#7b6aead9fb88b3623e3b3725ebb42670cbe4c579") # 3.4
-message(STATUS "Include GLFW3 WebGPU")
-cpmaddpackage(
-  "gh:eliemichel/glfw3webgpu#39a80205998c6cbf803e18e750d964c23a47ef39") # v1.2.0
-message(STATUS "Include spdlog")
-cpmaddpackage("gh:gabime/spdlog#27cb4c76708608465c413f6d0e6b8d99a4d84302"
-)# v1.14.1
-message(STATUS "Include WebGPU-distribution")
-cpmaddpackage(
-  "gh:eliemichel/WebGPU-distribution#b763f1277733bf5ccc07202f7ab51ad1fdb64453")
-# wgpu-v0.19.4.1
+include(Dependencies.cmake)
+learnwebgpu_setup_dependencies()
 
 add_executable(App src/main.cpp)
-target_link_libraries(App PUBLIC glfw spdlog webgpu glfw3webgpu
+target_link_libraries(App PUBLIC fmt::fmt glfw spdlog webgpu glfw3webgpu
                                  learnwebgpu_compiler_flags)
+target_compile_definitions(App PRIVATE SPDLOG_FMT_EXTERNAL)
+set_target_properties(App PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_COMMAND}")
 
 if(XCODE)
   set_target_properties(
