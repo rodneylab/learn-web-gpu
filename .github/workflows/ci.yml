@@ -28,6 +28,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install libxrandr-dev libxcursor-dev libudev-dev libopenal-dev libflac-dev libvorbis-dev libgl1-mesa-dev libegl1-mesa-dev freeglut3-dev libxinerama-dev libxi-dev libwayland-dev libxkbcommon-dev xorg-dev
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Cpp
+        uses: aminya/setup-cpp@d485b24c1283deafc12b4b8ae90ff09c0d1eb972 # v0.44.0
+        with:
+          clangtidy: true
       - name: Configure
         shell: bash
         run: cmake -S . -B build -DCMAKE_INSTALL_PREFIX=install ${{matrix.platform.flags}} ${{matrix.config.flags}}
