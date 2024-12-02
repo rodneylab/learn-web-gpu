@@ -1,4 +1,7 @@
+#include "debug_assert.h"
+
 #include <GLFW/glfw3.h>
+#include <exception>
 #include <fmt/format.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
@@ -14,6 +17,11 @@
 
 #include <memory>
 #include <optional>
+#include <stdexcept>
+
+class Error
+{
+};
 
 auto format_as(WGPUErrorType error_type)
 {
@@ -60,7 +68,6 @@ public:
     void Terminate();
 
     // Draw a frame and handle events
-    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     void MainLoop();
 
     // Return true while we require the main loop to remain running
@@ -70,7 +77,6 @@ private:
     // Substep of Initialise() that creates the render pipeline
     void InitialisePipeline();
 
-    // NOLINTNEXTLINE(readability-convert-member-functions-to-static)
     std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
 
     GLFWwindow *window{nullptr};
@@ -84,29 +90,36 @@ private:
 
 int main()
 {
-    Application app;
-
-    if (!app.Initialise())
+    try
     {
-        spdlog::error("Could not initialise WGPU!");
-        return 1;
-    }
+        Application app;
+
+        if (!app.Initialise())
+        {
+            spdlog::error("Could not initialise WGPU!");
+            return 1;
+        }
 
 #ifdef __EMSCRIPTEN__
-    // Equivalent of the main loop when using Emscripten
-    auto callback = [](void *arg) {
-        Application *pApp = reinterpret_cast<Application *>(arg);
-        pApp->MainLoop();
-    };
-    emscripten_set_main_loop_arg(callback, &app, 0, true);
+        // Equivalent of the main loop when using Emscripten
+        auto callback = [](void *arg) {
+            Application *pApp = reinterpret_cast<Application *>(arg);
+            pApp->MainLoop();
+        };
+        emscripten_set_main_loop_arg(callback, &app, 0, true);
 #else  // __EMSCRIPTEN__
-    while (app.IsRunning())
-    {
-        app.MainLoop();
-    }
+        while (app.IsRunning())
+        {
+            app.MainLoop();
+        }
 #endif // __EMSCRIPTEN__
 
-    return 0;
+        return 0;
+    }
+    catch (const std::exception &e)
+    {
+        spdlog::error("Error: {}", e.what());
+    }
 }
 
 namespace
@@ -147,7 +160,6 @@ bool Application::Initialise()
 
     spdlog::info("Requesting adapter...");
     surface = glfwGetWGPUSurface(instance, window);
-    // NOLINTNEXTLINE(misc-const-correctness)
     wgpu::RequestAdapterOptions adapterOpts{};
     adapterOpts.compatibleSurface = surface.value();
     wgpu::Adapter adapter{instance.requestAdapter(adapterOpts)};
@@ -246,13 +258,18 @@ void Application::Terminate()
     glfwTerminate();
 }
 
-// NOLINTNEXTLINE(readability-convert-member-functions-to-static)
 void Application::MainLoop()
 {
     glfwPollEvents();
 
     // Get the next target texture view
     std::optional<wgpu::TextureView> target_view{GetNextSurfaceTextureView()};
+    debug_assert(target_view.has_value(),
+                 std::runtime_error(
+                     fmt::format("Target view should be initialised before "
+                                 "entering the main loop: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
     if (!target_view.has_value())
     {
         return;
@@ -261,13 +278,14 @@ void Application::MainLoop()
     // Create a command encoder for the draw cell
     wgpu::CommandEncoderDescriptor encoderDesc = {};
     encoderDesc.label = "My command encoder";
-    if (!device.has_value())
-    {
-        spdlog::error(
-            "Device should be initialised before entering the main loop");
-        return;
-    }
+    debug_assert(
+        device.has_value(),
+        std::runtime_error(fmt::format("Device should be initialised before "
+                                       "entering the main loop: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
     wgpu::CommandEncoder encoder =
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         wgpuDeviceCreateCommandEncoder(device.value(), &encoderDesc);
 
     // Create the render pass that clears the screen with our colour
@@ -317,45 +335,44 @@ void Application::MainLoop()
     encoder.release();
 
     spdlog::info("Submitting command...");
-    if (queue.has_value())
-    {
-        queue.value().submit(1, &command);
-    }
-    else
-    {
-        spdlog::error(
-            "Queue should be initialised before entering the main loop");
-    }
+    debug_assert(
+        queue.has_value(),
+        std::runtime_error(fmt::format("Queue should be initialised before "
+                                       "entering the main loop: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().submit(1, &command);
+
     command.release();
     spdlog::info("Command submitted.");
 
     // At the end of the frame
     target_view.value().release();
 #ifndef __EMSCRIPTEN__
-    if (surface.has_value())
-    {
-        surface.value().present();
-    }
-    else
-    {
-        spdlog::error(
-            "Surface should be initialised before entering the main loop");
-    }
+    debug_assert(
+        surface.has_value(),
+        std::runtime_error(fmt::format("Surface should be initialised before "
+                                       "entering the main loop: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    surface.value().present();
 #endif
 
-    if (device.has_value())
-    {
+    debug_assert(
+        device.has_value(),
+        std::runtime_error(fmt::format("Device should be initialised before "
+                                       "entering the main loop: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
 #if defined(WEBGPU_BACKEND_DAWN)
-        // wgpuDeviceTick(device.value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    wgpuDeviceTick(device.value());
 #elif defined(WEBGPU_BACKEND_WGPU)
-        wgpuDevicePoll(device.value(), 0U, nullptr);
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    wgpuDevicePoll(device.value(), 0U, nullptr);
 #endif
-    }
-    else
-    {
-        spdlog::error(
-            "Device should be initialised before entering the main loop");
-    }
 }
 
 bool Application::IsRunning()
@@ -367,15 +384,14 @@ std::optional<wgpu::TextureView> Application::GetNextSurfaceTextureView()
 {
     // Get the surface texture
     wgpu::SurfaceTexture surfaceTexture;
-    if (surface.has_value())
-    {
-        surface.value().getCurrentTexture(&surfaceTexture);
-    }
-    else
-    {
-        spdlog::error("Surface should be initialise before getting the "
-                      "current texture");
-    }
+    debug_assert(surface.has_value(),
+                 std::runtime_error(fmt::format(
+                     "Surface should be initialise before getting the "
+                     "current texture: [{}:{}]",
+                     __FILE__,
+                     __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    surface.value().getCurrentTexture(&surfaceTexture);
 
     if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::Success)
     {
@@ -422,13 +438,14 @@ void Application::InitialisePipeline()
     // Connect the chain
     shader_descriptor.nextInChain = &shader_code_descriptor.chain;
     shader_code_descriptor.code = shader_source;
-    if (!device.has_value())
-    {
-        spdlog::error(
-            "Device should be initialised before creating a shader module");
-        return;
-    }
+    debug_assert(
+        device.has_value(),
+        std::runtime_error(fmt::format("Device should be initialised before "
+                                       "creating a shader module: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
     wgpu::ShaderModule shader_module{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         device.value().createShaderModule(shader_descriptor)};
 
     // Create the render pipeline
@@ -487,15 +504,15 @@ void Application::InitialisePipeline()
     pipeline_descriptor.multisample.alphaToCoverageEnabled = 0U;
     pipeline_descriptor.layout = nullptr;
 
-    if (device.has_value())
-    {
-        pipeline = std::optional<wgpu::RenderPipeline>{
-            device.value().createRenderPipeline(pipeline_descriptor)};
-    }
-    else
-    {
-        spdlog::error("Device should be initialised before the pipeline");
-    }
+    debug_assert(
+        device.has_value(),
+        std::runtime_error(fmt::format("Device should be initialised before "
+                                       "the pipeline: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
+    pipeline = std::optional<wgpu::RenderPipeline>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createRenderPipeline(pipeline_descriptor)};
 
     shader_module.release();
 }
