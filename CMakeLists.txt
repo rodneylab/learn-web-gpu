@@ -9,7 +9,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS True)
 
 add_library(learnwebgpu_compiler_flags INTERFACE)
 target_compile_features(learnwebgpu_compiler_flags INTERFACE cxx_std_17)
-
 set(gcc_like_cxx "$<COMPILE_LANG_AND_ID:CXX,ARMClang,AppleClang,Clang,GNU,LCC>")
 set(msvc_cxx "$<COMPILE_LANG_AND_ID:CXX,MSVC>")
 target_compile_options(
@@ -27,23 +26,10 @@ include(coverage)
 add_coverage_target("Catch_tests/*")
 
 include(utils.cmake)
-
 include(Dependencies.cmake)
 learnwebgpu_setup_dependencies()
 
-add_executable(App src/main.cpp)
-target_link_libraries(App PUBLIC fmt::fmt glfw spdlog webgpu glfw3webgpu
-                                 learnwebgpu_compiler_flags)
-target_compile_definitions(App PRIVATE SPDLOG_FMT_EXTERNAL)
-set_target_properties(App PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_COMMAND}")
-
-if(XCODE)
-  set_target_properties(
-    App PROPERTIES XCODE_GENERATE_SCHEME ON
-                   XCODE_SCHEME_ENABLE_GPU_FRAME_CAPTURE_MODE "Metal")
-endif()
-
-target_copy_webgpu_binaries(App)
+add_subdirectory(src)
 
 option(RUN_UNIT_TESTS "Run Catch2 unit tests" ON)
 if(RUN_UNIT_TESTS)
