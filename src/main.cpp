@@ -1,8 +1,8 @@
 #include "debug_assert.h"
 
 #include <GLFW/glfw3.h>
-#include <exception>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
 
@@ -15,8 +15,11 @@
 #include <emscripten.h>
 #endif
 
+#include <cstdint>
+#include <exception>
 #include <memory>
 #include <optional>
+#include <vector>
 
 class Error
 {
@@ -30,6 +33,11 @@ auto format_as(WGPUErrorType error_type)
 auto format_as(WGPUDeviceLostReason reason)
 {
     return fmt::underlying(reason);
+}
+
+auto format_as(WGPUBufferMapAsyncStatus status)
+{
+    return fmt::underlying(status);
 }
 
 auto format_as(WGPUQueueWorkDoneStatus status)
@@ -57,6 +65,22 @@ fn fs_main() -> @location(0) vec4f {
 }
 )"};
 
+void wgpu_poll_events([[maybe_unused]] wgpu::Device device,
+                      [[maybe_unused]] bool yield_to_browser)
+{
+#if defined(WEBGPU_BACKEND_DAWN)
+    device.tick();
+#elif defined(WEBGPU_BACKEND_WGPU)
+    // device.poll(false);
+    wgpuDevicePoll(device, 0U, nullptr);
+#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
+    if (yield_to_browser)
+    {
+        emscripten_sleep(100);
+    }
+#endif
+}
+
 class Application
 {
 public:
@@ -75,6 +99,8 @@ public:
 private:
     // Substep of Initialise() that creates the render pipeline
     void InitialisePipeline();
+
+    void PlayingWithBuffers();
 
     std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
 
@@ -227,6 +253,8 @@ bool Application::Initialise()
     glfwSetKeyCallback(window, key_callback);
 
     InitialisePipeline();
+
+    PlayingWithBuffers();
 
     return true;
 }
@@ -514,4 +542,102 @@ void Application::InitialisePipeline()
         device.value().createRenderPipeline(pipeline_descriptor)};
 
     shader_module.release();
+}
+
+void Application::PlayingWithBuffers()
+{
+    wgpu::BufferDescriptor buffer_descriptor{};
+    buffer_descriptor.label = "Some GPU-side data buffer";
+    buffer_descriptor.usage =
+        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
+    constexpr int kBufferSize{16};
+    buffer_descriptor.size = kBufferSize;
+    buffer_descriptor.mappedAtCreation = 0U;
+    debug_assert(device.has_value(),
+                 std::runtime_error(
+                     fmt::format("Device should be initialised before calling "
+                                 "the PlayingWithBuffers function: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    wgpu::Buffer buffer_1{device.value().createBuffer(buffer_descriptor)};
+    buffer_descriptor.label = "Output buffer";
+    buffer_descriptor.usage =
+        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    wgpu::Buffer buffer_2{device.value().createBuffer(buffer_descriptor)};
+
+    std::vector<uint8_t> numbers(kBufferSize);
+    uint8_t number_value{0};
+    for (auto &number : numbers)
+    {
+        number = number_value;
+        ++number_value;
+    }
+    spdlog::info("buffer_data = [ {} ]", fmt::join(numbers, ", "));
+
+    debug_assert(queue.has_value(),
+                 std::runtime_error(
+                     fmt::format("Queue should be initialised before calling "
+                                 "the PlayingWithBuffers function: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().writeBuffer(buffer_1, 0, numbers.data(), numbers.size());
+    wgpu::CommandEncoder encoder{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createCommandEncoder(wgpu::Default)};
+
+    encoder.copyBufferToBuffer(buffer_1, 0, buffer_2, 0, kBufferSize);
+
+    wgpu::CommandBuffer command{encoder.finish(wgpu::Default)};
+    encoder.release();
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().submit(1, &command);
+    command.release();
+
+    struct Context
+    {
+        bool ready;
+        wgpu::Buffer buffer;
+    };
+
+    auto on_buffer_to_mapped = [](WGPUBufferMapAsyncStatus status,
+                                  void *user_data) {
+        Context *context{static_cast<Context *>(user_data)};
+        context->ready = true;
+        spdlog::info("Buffer to mapped with status {}", status);
+        if (status != wgpu::BufferMapAsyncStatus::Success)
+        {
+            return;
+        }
+
+        // Get a pointer to wherever the driver mapped the GPU memory to the RAM
+        const auto *buffer_data_c_array = static_cast<const uint8_t *>(
+            context->buffer.getConstMappedRange(0, kBufferSize));
+        std::vector<uint8_t> buffer_data;
+        constexpr int kBufferSize{16};
+        buffer_data.reserve(kBufferSize);
+        buffer_data.assign(*buffer_data_c_array,
+                           *buffer_data_c_array + kBufferSize);
+        spdlog::info("buffer_data = [ {} ]", fmt::join(buffer_data, ", "));
+        context->buffer.unmap();
+    };
+
+    const Context context{false, buffer_2};
+    wgpuBufferMapAsync(buffer_2,
+                       wgpu::MapMode::Read,
+                       0,
+                       kBufferSize,
+                       on_buffer_to_mapped,
+                       (void *)&context);
+
+    while (!context.ready)
+    {
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        wgpu_poll_events(device.value(), true);
+    }
+
+    buffer_1.release();
+    buffer_2.release();
 }
