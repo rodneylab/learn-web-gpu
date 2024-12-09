@@ -602,27 +602,27 @@ void Application::PlayingWithBuffers()
         wgpu::Buffer buffer;
     };
 
-    auto on_buffer_to_mapped = [](WGPUBufferMapAsyncStatus status,
-                                  void *user_data) {
-        Context *context{static_cast<Context *>(user_data)};
-        context->ready = true;
-        spdlog::info("Buffer to mapped with status {}", status);
-        if (status != wgpu::BufferMapAsyncStatus::Success)
-        {
-            return;
-        }
+    WGPUBufferMapCallback on_buffer_to_mapped =
+        [](WGPUBufferMapAsyncStatus status, void *user_data) {
+            Context *context{static_cast<Context *>(user_data)};
+            context->ready = true;
+            spdlog::info("Buffer to mapped with status {}", status);
+            if (status != wgpu::BufferMapAsyncStatus::Success)
+            {
+                return;
+            }
 
-        // Get a pointer to wherever the driver mapped the GPU memory to the RAM
-        const auto *buffer_data_c_array = static_cast<const uint8_t *>(
-            context->buffer.getConstMappedRange(0, kBufferSize));
-        std::vector<uint8_t> buffer_data;
-        constexpr int kBufferSize{16};
-        buffer_data.reserve(kBufferSize);
-        buffer_data.assign(*buffer_data_c_array,
-                           *buffer_data_c_array + kBufferSize);
-        spdlog::info("buffer_data = [ {} ]", fmt::join(buffer_data, ", "));
-        context->buffer.unmap();
-    };
+            // Get a pointer to wherever the driver mapped the GPU memory to the RAM
+            constexpr int kBufferSize{16};
+            const auto *buffer_data_c_array = static_cast<const uint8_t *>(
+                context->buffer.getConstMappedRange(0, kBufferSize));
+            std::vector<uint8_t> buffer_data;
+            buffer_data.reserve(kBufferSize);
+            buffer_data.assign(*buffer_data_c_array,
+                               *buffer_data_c_array + kBufferSize);
+            spdlog::info("buffer_data = [ {} ]", fmt::join(buffer_data, ", "));
+            context->buffer.unmap();
+        };
 
     const Context context{false, buffer_2};
     wgpuBufferMapAsync(buffer_2,
