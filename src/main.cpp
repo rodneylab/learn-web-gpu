@@ -14,7 +14,6 @@
 #include <emscripten.h>
 #endif
 
-#include <algorithm>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
@@ -625,11 +624,12 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
     // are too big.
     // [Default from standard](https://www.w3.org/TR/webgpu/#limit-default]
     // is 8192.
-) is 8192 (see link)
     // https://www.w3.org/TR/webgpu/#limit-default default from standard
-    required_limits.limits.maxTextureDimension2D = 8'192;
+    constexpr int kDefaultMaxTextureDimension2d{8'192};
+    required_limits.limits.maxTextureDimension2D =
+        kDefaultMaxTextureDimension2d;
 
-return required_limits;
+    return required_limits;
 }
 
 void Application::InitialiseBuffers()
