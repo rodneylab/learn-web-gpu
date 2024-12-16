@@ -2,7 +2,6 @@
 
 #include <GLFW/glfw3.h>
 #include <fmt/format.h>
-#include <fmt/ranges.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
 
@@ -15,11 +14,20 @@
 #include <emscripten.h>
 #endif
 
+#include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <vector>
+
+namespace constants
+{
+inline constexpr int kWindowWidth{640};
+inline constexpr int kWindowHeight{480};
+} // namespace constants
 
 class Error
 {
@@ -47,16 +55,8 @@ auto format_as(WGPUQueueWorkDoneStatus status)
 
 const char *const shader_source{R"(
 @vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4f {
-    var p = vec2f(0.0, 0.0);
-    if in_vertex_index == 0u {
-        p = vec2f(-0.5, -0.5);
-    } else if in_vertex_index == 1u {
-        p = vec2f(0.5, -0.5);
-    } else {
-        p = vec2f(0.0, 0.5);
-    }
-    return vec4f(p, 0.0, 1.0);
+fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
+    return vec4f(in_vertex_position, 0.0, 1.0);
 }
 
 @fragment
@@ -97,12 +97,13 @@ public:
     bool IsRunning();
 
 private:
+    std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
+
     // Substep of Initialise() that creates the render pipeline
     void InitialisePipeline();
-
-    void PlayingWithBuffers();
-
-    std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
+    [[nodiscard]] static wgpu::RequiredLimits GetRequiredLimits(
+        wgpu::Adapter adapter);
+    void InitialiseBuffers();
 
     GLFWwindow *window{nullptr};
     std::optional<wgpu::Device> device{std::nullopt};
@@ -111,7 +112,26 @@ private:
     std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle{nullptr};
     wgpu::TextureFormat surface_format{wgpu::TextureFormat::Undefined};
     std::optional<wgpu::RenderPipeline> pipeline{std::nullopt};
+    std::optional<wgpu::Buffer> vertex_buffer{std::nullopt};
+    uint32_t vertex_count{};
 };
+
+void signal_handler(int signal)
+{
+    if (signal == SIGABRT)
+    {
+        spdlog::info("Abort signal received");
+        spdlog::error("Abort signal received");
+        std::cerr << "Abort signal received\n";
+    }
+    else
+    {
+        spdlog::info("Unexpected signal received");
+        spdlog::error("Unexpected signal received");
+        std::cerr << "Unexpected signal received\n";
+    }
+    std::_Exit(EXIT_FAILURE);
+}
 
 int main()
 {
@@ -171,17 +191,13 @@ bool Application::Initialise()
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    constexpr int kWindowWidth{640};
-    constexpr int kWindowHeight{480};
-    window = glfwCreateWindow(kWindowWidth,
-                              kWindowHeight,
+    window = glfwCreateWindow(constants::kWindowWidth,
+                              constants::kWindowHeight,
                               "Learn WebGPU",
                               nullptr,
                               nullptr);
 
     wgpu::Instance instance{wgpuCreateInstance(nullptr)};
-
-    surface = glfwGetWGPUSurface(instance, window);
 
     spdlog::info("Requesting adapter...");
     surface = glfwGetWGPUSurface(instance, window);
@@ -189,6 +205,12 @@ bool Application::Initialise()
     adapterOpts.compatibleSurface = surface.value();
     wgpu::Adapter adapter{instance.requestAdapter(adapterOpts)};
     spdlog::info("Got adapter: {}", (void *)adapter);
+
+    wgpu::SupportedLimits supported_limits;
+    adapter.getLimits(&supported_limits);
+
+    spdlog::info("adapter.maxVertexAttributes: {}",
+                 supported_limits.limits.maxVertexAttributes);
 
     instance.release();
 
@@ -211,8 +233,14 @@ bool Application::Initialise()
             spdlog::info("Device lost: reason: {}", reason);
         }
     };
+    wgpu::RequiredLimits required_limits{GetRequiredLimits(adapter)};
+    deviceDesc.requiredLimits = &required_limits;
     device = std::optional<wgpu::Device>{adapter.requestDevice(deviceDesc)};
     spdlog::info("Got device: {}\n", (void *)device.value());
+
+    device.value().getLimits(&supported_limits);
+    spdlog::info("device.maxVertexAttributes: {}",
+                 supported_limits.limits.maxVertexAttributes);
 
     uncapturedErrorCallbackHandle = device.value().setUncapturedErrorCallback(
         [](WGPUErrorType error_type, char const *message) {
@@ -232,8 +260,8 @@ bool Application::Initialise()
 
     // Configure the surface
     wgpu::SurfaceConfiguration config = {};
-    config.width = kWindowWidth;
-    config.height = kWindowHeight;
+    config.width = constants::kWindowWidth;
+    config.height = constants::kWindowHeight;
     config.usage = wgpu::TextureUsage::RenderAttachment;
     surface_format = surface.value().getPreferredFormat(adapter);
     config.format = surface_format;
@@ -253,14 +281,17 @@ bool Application::Initialise()
     glfwSetKeyCallback(window, key_callback);
 
     InitialisePipeline();
-
-    PlayingWithBuffers();
+    InitialiseBuffers();
 
     return true;
 }
 
 void Application::Terminate()
 {
+    if (vertex_buffer.has_value())
+    {
+        vertex_buffer.value().release();
+    }
     if (pipeline.has_value())
     {
         pipeline.value().release();
@@ -350,7 +381,21 @@ void Application::MainLoop()
         spdlog::error(
             "Pipeline should be initialised before entering main loop");
     }
-    renderPass.draw(3, 1, 0, 0);
+
+    debug_assert(vertex_buffer.has_value(),
+                 std::runtime_error(
+                     fmt::format("Vertex buffer should be initialised before "
+                                 "entering the main loop: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    renderPass.setVertexBuffer(
+        0,
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        vertex_buffer.value(),
+        0,
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        vertex_buffer.value().getSize());
+    renderPass.draw(vertex_count, 1, 0, 0);
 
     renderPass.end();
     renderPass.release();
@@ -478,9 +523,20 @@ void Application::InitialisePipeline()
     // Create the render pipeline
     wgpu::RenderPipelineDescriptor pipeline_descriptor{};
 
-    // We do not use any vertex buffer for this first example
-    pipeline_descriptor.vertex.bufferCount = 0;
-    pipeline_descriptor.vertex.buffers = nullptr;
+    wgpu::VertexBufferLayout vertex_buffer_layout;
+    wgpu::VertexAttribute position_attribute;
+    position_attribute.shaderLocation = 0;
+    position_attribute.format = wgpu::VertexFormat::Float32x2;
+    position_attribute.offset = 0;
+
+    vertex_buffer_layout.attributeCount = 1;
+    vertex_buffer_layout.attributes = &position_attribute;
+
+    vertex_buffer_layout.arrayStride = 2 * sizeof(float);
+    vertex_buffer_layout.stepMode = wgpu::VertexStepMode::Vertex;
+
+    pipeline_descriptor.vertex.bufferCount = 1;
+    pipeline_descriptor.vertex.buffers = &vertex_buffer_layout;
 
     pipeline_descriptor.vertex.module = shader_module;
     pipeline_descriptor.vertex.entryPoint = "vs_main";
@@ -544,100 +600,90 @@ void Application::InitialisePipeline()
     shader_module.release();
 }
 
-void Application::PlayingWithBuffers()
+wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
 {
+    wgpu::SupportedLimits supported_limits;
+    adapter.getLimits(&supported_limits);
+
+    wgpu::RequiredLimits required_limits{wgpu::Default};
+
+    required_limits.limits.maxVertexAttributes = 1;
+    required_limits.limits.maxVertexBuffers = 1;
+    required_limits.limits.maxBufferSize =
+        static_cast<long>(6) * 2 * sizeof(float);
+    required_limits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+
+    // Default values might not be supported by the adapter, so assign adapter
+    // the known supported minimum values
+    required_limits.limits.minUniformBufferOffsetAlignment =
+        supported_limits.limits.minUniformBufferOffsetAlignment;
+    required_limits.limits.minStorageBufferOffsetAlignment =
+        supported_limits.limits.minStorageBufferOffsetAlignment;
+
+    // Value is being set to 0 by default, so when limits applied, all textures
+    // are too big.
+    // [Default from standard](https://www.w3.org/TR/webgpu/#limit-default]
+    // is 8192.
+    constexpr int kDefaultMaxTextureDimension2d{8'192};
+    required_limits.limits.maxTextureDimension2D =
+        kDefaultMaxTextureDimension2d;
+
+    return required_limits;
+}
+
+void Application::InitialiseBuffers()
+{
+    const std::vector<float> vertex_data{
+        // clang-format off
+        // NOLINTBEGIN(readability-magic-numbers)
+        // each pair here forms the x,y coordinates of a  triangle vertex
+
+        // first triangle
+        -0.5F, -0.5F,
+        0.5F, -0.5F,
+        0.0F, 0.5F,
+
+        // second triangle
+        -0.55F, -0.5F,
+        -0.05F, 0.5F,
+        -0.55F, 0.5F,
+        // NOLINTEND(readability-magic-numbers)
+        // clang-format on
+    };
+    vertex_count = static_cast<uint32_t>(vertex_data.size() / 2);
+
     wgpu::BufferDescriptor buffer_descriptor{};
-    buffer_descriptor.label = "Some GPU-side data buffer";
+    buffer_descriptor.size = vertex_data.size() * sizeof(float);
     buffer_descriptor.usage =
-        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
-    constexpr int kBufferSize{16};
-    buffer_descriptor.size = kBufferSize;
+        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;
     buffer_descriptor.mappedAtCreation = 0U;
+    buffer_descriptor.label = "A couple of triangle x,y-vertex sets";
     debug_assert(device.has_value(),
                  std::runtime_error(
                      fmt::format("Device should be initialised before calling "
-                                 "the PlayingWithBuffers function: [{}:{}]",
+                                 "the InitialiseBuffers function: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    wgpu::Buffer buffer_1{device.value().createBuffer(buffer_descriptor)};
-    buffer_descriptor.label = "Output buffer";
-    buffer_descriptor.usage =
-        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    wgpu::Buffer buffer_2{device.value().createBuffer(buffer_descriptor)};
-
-    std::vector<uint8_t> numbers(kBufferSize);
-    uint8_t number_value{0};
-    for (auto &number : numbers)
-    {
-        number = number_value;
-        ++number_value;
-    }
-    spdlog::info("buffer_data = [ {} ]", fmt::join(numbers, ", "));
+    vertex_buffer = std::optional<wgpu::Buffer>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createBuffer(buffer_descriptor)};
 
     debug_assert(queue.has_value(),
                  std::runtime_error(
                      fmt::format("Queue should be initialised before calling "
-                                 "the PlayingWithBuffers function: [{}:{}]",
+                                 "the InitialiseBuffers function: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    debug_assert(vertex_buffer.has_value(),
+                 std::runtime_error(
+                     fmt::format("Vertex buffer should have been initialised "
+                                 "before attempting to write to it in "
+                                 "the InitialiseBuffers function: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    queue.value().writeBuffer(buffer_1, 0, numbers.data(), numbers.size());
-    wgpu::CommandEncoder encoder{
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        device.value().createCommandEncoder(wgpu::Default)};
-
-    encoder.copyBufferToBuffer(buffer_1, 0, buffer_2, 0, kBufferSize);
-
-    wgpu::CommandBuffer command{encoder.finish(wgpu::Default)};
-    encoder.release();
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    queue.value().submit(1, &command);
-    command.release();
-
-    struct Context
-    {
-        bool ready;
-        wgpu::Buffer buffer;
-    };
-
-    WGPUBufferMapCallback on_buffer_to_mapped =
-        [](WGPUBufferMapAsyncStatus status, void *user_data) {
-            Context *context{static_cast<Context *>(user_data)};
-            context->ready = true;
-            spdlog::info("Buffer to mapped with status {}", status);
-            if (status != wgpu::BufferMapAsyncStatus::Success)
-            {
-                return;
-            }
-
-            // Get a pointer to wherever the driver mapped the GPU memory to the RAM
-            constexpr int kBufferSize{16};
-            const auto *buffer_data_c_array = static_cast<const uint8_t *>(
-                context->buffer.getConstMappedRange(0, kBufferSize));
-            std::vector<uint8_t> buffer_data;
-            buffer_data.reserve(kBufferSize);
-            buffer_data.assign(*buffer_data_c_array,
-                               *buffer_data_c_array + kBufferSize);
-            spdlog::info("buffer_data = [ {} ]", fmt::join(buffer_data, ", "));
-            context->buffer.unmap();
-        };
-
-    const Context context{false, buffer_2};
-    wgpuBufferMapAsync(buffer_2,
-                       wgpu::MapMode::Read,
-                       0,
-                       kBufferSize,
-                       on_buffer_to_mapped,
-                       (void *)&context);
-
-    while (!context.ready)
-    {
-        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        wgpu_poll_events(device.value(), true);
-    }
-
-    buffer_1.release();
-    buffer_2.release();
+    queue.value().writeBuffer(vertex_buffer.value(),
+                              0,
+                              vertex_data.data(),
+                              buffer_descriptor.size);
 }
