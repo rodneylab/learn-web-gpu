@@ -14,7 +14,6 @@
 #include <emscripten.h>
 #endif
 
-#include <algorithm>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
