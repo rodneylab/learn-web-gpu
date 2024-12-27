@@ -4,8 +4,9 @@ function(learnwebgpu_setup_dependencies)
   cpmusepackagelock(package-lock.cmake)
 
   message(STATUS "Include fmtlib")
-  cpmaddpackage("gh:fmtlib/fmt#0c9fce2ffefecfdce794e1859584e25877b7b592"
-  )# 11.0.2
+  cpmaddpackage("gh:fmtlib/fmt#0e8aad961d66904cfda8d7cc894f6f6eee2d9f30"
+  )# 11.1.0
+  message(STATUS "Added fmtlib with CPM as ${CPM_LAST_PACKAGE_NAME}")
 
   message(STATUS "Include GLFW")
   cpmaddpackage("gh:glfw/glfw#7b6aead9fb88b3623e3b3725ebb42670cbe4c579") # 3.4
