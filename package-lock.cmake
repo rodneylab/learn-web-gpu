@@ -4,7 +4,7 @@
 cpmdeclarepackage(
   fmt
   GIT_TAG
-  0c9fce2ffefecfdce794e1859584e25877b7b592
+  e3ddede6c4ee818825c4e5a6dfa1d384860c27d9
   GITHUB_REPOSITORY
   fmtlib/fmt
   SYSTEM
