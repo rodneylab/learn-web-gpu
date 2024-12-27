@@ -54,14 +54,28 @@ auto format_as(WGPUQueueWorkDoneStatus status)
 }
 
 const char *const shader_source{R"(
+struct VertexInput {
+    @location(0) position: vec2f,
+    @location(1) color: vec3f,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4f,
+    @location(0) color: vec3f,
+};
+
 @vertex
-fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f {
-    return vec4f(in_vertex_position, 0.0, 1.0);
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4f(in.position, 0.0, 1.0);
+    out.color = in.color;
+
+    return out;
 }
 
 @fragment
-fn fs_main() -> @location(0) vec4f {
-    return vec4f(0.0, 0.4, 1.0, 1.0);
+fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+    return vec4f(in.color, 1.0);
 }
 )"};
 
@@ -356,9 +370,9 @@ void Application::MainLoop()
     renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
     renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
 
-    constexpr double kClearRedColour{0.9};
-    constexpr double kClearGreenColour{0.1};
-    constexpr double kClearBlueColour{0.2};
+    constexpr double kClearRedColour{0.05};
+    constexpr double kClearGreenColour{0.05};
+    constexpr double kClearBlueColour{0.05};
     renderPassColorAttachment.clearValue =
         wgpu::Color{kClearRedColour, kClearGreenColour, kClearBlueColour, 1.0};
 #ifndef WEBGPU_BACKEND_WGPU
@@ -524,15 +538,23 @@ void Application::InitialisePipeline()
     wgpu::RenderPipelineDescriptor pipeline_descriptor{};
 
     wgpu::VertexBufferLayout vertex_buffer_layout;
-    wgpu::VertexAttribute position_attribute;
-    position_attribute.shaderLocation = 0;
-    position_attribute.format = wgpu::VertexFormat::Float32x2;
-    position_attribute.offset = 0;
+    std::vector<wgpu::VertexAttribute> vertex_attributes{2};
 
-    vertex_buffer_layout.attributeCount = 1;
-    vertex_buffer_layout.attributes = &position_attribute;
+    // position attribute
+    vertex_attributes[0].shaderLocation = 0;
+    vertex_attributes[0].format = wgpu::VertexFormat::Float32x2;
+    vertex_attributes[0].offset = 0;
 
-    vertex_buffer_layout.arrayStride = 2 * sizeof(float);
+    // colour attribute
+    vertex_attributes[1].shaderLocation = 1;
+    vertex_attributes[1].format = wgpu::VertexFormat::Float32x3;
+    vertex_attributes[1].offset = 2 * sizeof(float);
+
+    vertex_buffer_layout.attributeCount =
+        static_cast<uint32_t>(vertex_attributes.size());
+    vertex_buffer_layout.attributes = vertex_attributes.data();
+
+    vertex_buffer_layout.arrayStride = 5 * sizeof(float);
     vertex_buffer_layout.stepMode = wgpu::VertexStepMode::Vertex;
 
     pipeline_descriptor.vertex.bufferCount = 1;
@@ -607,11 +629,12 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
 
     wgpu::RequiredLimits required_limits{wgpu::Default};
 
-    required_limits.limits.maxVertexAttributes = 1;
+    required_limits.limits.maxVertexAttributes = 2;
     required_limits.limits.maxVertexBuffers = 1;
     required_limits.limits.maxBufferSize =
-        static_cast<long>(6) * 2 * sizeof(float);
-    required_limits.limits.maxVertexBufferArrayStride = 2 * sizeof(float);
+        static_cast<long>(6) * 5 * sizeof(float);
+    required_limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
+    required_limits.limits.maxInterStageShaderComponents = 3;
 
     // Default values might not be supported by the adapter, so assign adapter
     // the known supported minimum values
@@ -639,18 +662,20 @@ void Application::InitialiseBuffers()
         // each pair here forms the x,y coordinates of a  triangle vertex
 
         // first triangle
-        -0.5F, -0.5F,
-        0.5F, -0.5F,
-        0.0F, 0.5F,
+        // x0, y0, red0, green0, blue0
+        -0.5F, -0.5F, 1.0F, 0.0F, 0.0F,
+        0.5F, -0.5F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.5F, 0.0F, 0.0F, 1.0F,
 
         // second triangle
-        -0.55F, -0.5F,
-        -0.05F, 0.5F,
-        -0.55F, 0.5F,
+        -0.55F, -0.5F, 1.0F, 1.0F, 0.0F,
+        -0.05F, 0.5F, 1.0F, 0.0F, 1.0F,
+        -0.55F, 0.5F, 0.0F, 1.0F, 1.0F,
+
         // NOLINTEND(readability-magic-numbers)
         // clang-format on
     };
-    vertex_count = static_cast<uint32_t>(vertex_data.size() / 2);
+    vertex_count = static_cast<uint32_t>(vertex_data.size() / 5);
 
     wgpu::BufferDescriptor buffer_descriptor{};
     buffer_descriptor.size = vertex_data.size() * sizeof(float);
