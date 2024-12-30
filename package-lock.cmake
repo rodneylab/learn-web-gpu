@@ -37,7 +37,7 @@ cpmdeclarepackage(
 cpmdeclarepackage(
   spdlog
   GIT_TAG
-  8e5613379f5140fefb0b60412fbf1f5406e7c7f8
+  276ee5f5c0eb13626bd367b006ace5eae9526d8a
   GITHUB_REPOSITORY
   gabime/spdlog
   SYSTEM
