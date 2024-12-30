@@ -67,7 +67,8 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.position = vec4f(in.position, 0.0, 1.0);
+    let ratio = 640.0 / 480.0;
+    out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
     out.color = in.color;
 
     return out;
@@ -126,8 +127,9 @@ private:
     std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle{nullptr};
     wgpu::TextureFormat surface_format{wgpu::TextureFormat::Undefined};
     std::optional<wgpu::RenderPipeline> pipeline{std::nullopt};
-    std::optional<wgpu::Buffer> vertex_buffer{std::nullopt};
-    uint32_t vertex_count{};
+    std::optional<wgpu::Buffer> point_buffer{std::nullopt};
+    std::optional<wgpu::Buffer> index_buffer{std::nullopt};
+    uint32_t index_count{};
 };
 
 void signal_handler(int signal)
@@ -302,9 +304,13 @@ bool Application::Initialise()
 
 void Application::Terminate()
 {
-    if (vertex_buffer.has_value())
+    if (point_buffer.has_value())
     {
-        vertex_buffer.value().release();
+        point_buffer.value().release();
+    }
+    if (index_buffer.has_value())
+    {
+        index_buffer.value().release();
     }
     if (pipeline.has_value())
     {
@@ -396,20 +402,34 @@ void Application::MainLoop()
             "Pipeline should be initialised before entering main loop");
     }
 
-    debug_assert(vertex_buffer.has_value(),
+    debug_assert(point_buffer.has_value(),
                  std::runtime_error(
-                     fmt::format("Vertex buffer should be initialised before "
+                     fmt::format("Point buffer should be initialised before "
                                  "entering the main loop: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
     renderPass.setVertexBuffer(
         0,
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        vertex_buffer.value(),
+        point_buffer.value(),
         0,
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        vertex_buffer.value().getSize());
-    renderPass.draw(vertex_count, 1, 0, 0);
+        point_buffer.value().getSize());
+    debug_assert(index_buffer.has_value(),
+                 std::runtime_error(
+                     fmt::format("Index buffer should be initialised before "
+                                 "entering the main loop: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    renderPass.setIndexBuffer(
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        index_buffer.value(),
+        wgpu::IndexFormat::Uint16,
+        0,
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        index_buffer.value().getSize());
+
+    renderPass.drawIndexed(index_count, 1, 0, 0, 0);
 
     renderPass.end();
     renderPass.release();
@@ -656,29 +676,32 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
 
 void Application::InitialiseBuffers()
 {
-    const std::vector<float> vertex_data{
+    const std::vector<float> point_data{
+        // each pair here forms the x,y coordinates of a triangle vertex
         // clang-format off
         // NOLINTBEGIN(readability-magic-numbers)
-        // each pair here forms the x,y coordinates of a  triangle vertex
-
         // first triangle
         // x0, y0, red0, green0, blue0
         -0.5F, -0.5F, 1.0F, 0.0F, 0.0F,
         0.5F, -0.5F, 0.0F, 1.0F, 0.0F,
-        0.0F, 0.5F, 0.0F, 0.0F, 1.0F,
-
-        // second triangle
-        -0.55F, -0.5F, 1.0F, 1.0F, 0.0F,
-        -0.05F, 0.5F, 1.0F, 0.0F, 1.0F,
-        -0.55F, 0.5F, 0.0F, 1.0F, 1.0F,
+        0.5F, 0.5F, 0.0F, 0.0F, 1.0F,
+        -0.5F, 0.5F, 1.0F, 1.0F, 0.0F,
 
         // NOLINTEND(readability-magic-numbers)
         // clang-format on
     };
-    vertex_count = static_cast<uint32_t>(vertex_data.size() / 5);
+    const std::vector<uint16_t> index_data{
+        0,
+        1,
+        2, // triangle 0 connects points 0, 1 & 2
+        0,
+        2,
+        3}; // triangle 1 connects points 0, 2 & 3
+    index_count = static_cast<uint32_t>(index_data.size());
+    // point_count = static_cast<uint32_t>(point_data.size() / 5);
 
     wgpu::BufferDescriptor buffer_descriptor{};
-    buffer_descriptor.size = vertex_data.size() * sizeof(float);
+    buffer_descriptor.size = point_data.size() * sizeof(float);
     buffer_descriptor.usage =
         wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;
     buffer_descriptor.mappedAtCreation = 0U;
@@ -689,7 +712,7 @@ void Application::InitialiseBuffers()
                                  "the InitialiseBuffers function: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
-    vertex_buffer = std::optional<wgpu::Buffer>{
+    point_buffer = std::optional<wgpu::Buffer>{
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         device.value().createBuffer(buffer_descriptor)};
 
@@ -707,8 +730,25 @@ void Application::InitialiseBuffers()
                                  __FILE__,
                                  __LINE__)));
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    queue.value().writeBuffer(vertex_buffer.value(),
+    queue.value().writeBuffer(point_buffer.value(),
                               0,
-                              vertex_data.data(),
+                              point_data.data(),
+                              buffer_descriptor.size);
+
+    // Create index buffer
+    buffer_descriptor.size = index_data.size() * sizeof(uint16_t);
+    buffer_descriptor.size =
+        (buffer_descriptor.size + 3) &
+        static_cast<uint64_t>(
+            ~(uint8_t)3); // round up to the next multiple of 4
+    buffer_descriptor.usage =
+        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index;
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    index_buffer = device.value().createBuffer(buffer_descriptor);
+
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().writeBuffer(index_buffer.value(),
+                              0,
+                              index_data.data(),
                               buffer_descriptor.size);
 }
