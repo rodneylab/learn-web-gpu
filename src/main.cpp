@@ -1,11 +1,11 @@
 #include "debug_assert.h"
+#include "utilities/resource_manager.h"
 
 #include <GLFW/glfw3.h>
 #include <fmt/format.h>
 #include <glfw3webgpu.h>
 #include <spdlog/spdlog.h>
 
-#define WEBGPU_CPP_IMPLEMENTATION
 #include <webgpu/webgpu.h>
 #include <webgpu/webgpu.hpp>
 #include <webgpu/wgpu.h>
@@ -52,33 +52,6 @@ auto format_as(WGPUQueueWorkDoneStatus status)
 {
     return fmt::underlying(status);
 }
-
-const char *const shader_source{R"(
-struct VertexInput {
-    @location(0) position: vec2f,
-    @location(1) color: vec3f,
-};
-
-struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) color: vec3f,
-};
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
-    var out: VertexOutput;
-    let ratio = 640.0 / 480.0;
-    out.position = vec4f(in.position.x, in.position.y * ratio, 0.0, 1.0);
-    out.color = in.color;
-
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    return vec4f(in.color, 1.0);
-}
-)"};
 
 void wgpu_poll_events([[maybe_unused]] wgpu::Device device,
                       [[maybe_unused]] bool yield_to_browser)
@@ -526,33 +499,25 @@ std::optional<wgpu::TextureView> Application::GetNextSurfaceTextureView()
 
 void Application::InitialisePipeline()
 {
-    // Load the shader module
-    wgpu::ShaderModuleDescriptor shader_descriptor{};
-#ifdef WEBGPU_BACKEND_WGPU
-    shader_descriptor.hintCount = 0;
-    shader_descriptor.hints = nullptr;
-#endif
-
-    // Use the extension mechanism to specify the WGSL part of the shader module descriptor
-    wgpu::ShaderModuleWGSLDescriptor shader_code_descriptor{};
-
-    // Set the chained struct's header
-    shader_code_descriptor.chain.next = nullptr;
-    shader_code_descriptor.chain.sType =
-        wgpu::SType::ShaderModuleWGSLDescriptor;
-
-    // Connect the chain
-    shader_descriptor.nextInChain = &shader_code_descriptor.chain;
-    shader_code_descriptor.code = shader_source;
     debug_assert(
         device.has_value(),
         std::runtime_error(fmt::format("Device should be initialised before "
                                        "creating a shader module: [{}:{}]",
                                        __FILE__,
                                        __LINE__)));
-    wgpu::ShaderModule shader_module{
+    spdlog::info("Creating shader module...");
+    wgpu::ShaderModule shader_module{ResourceManager::load_shader_module(
+        RESOURCE_DIR "/shader.wgsl",
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-        device.value().createShaderModule(shader_descriptor)};
+        device.value())};
+
+    if (shader_module == nullptr)
+    {
+        spdlog::error("Could not load shader.");
+        std::abort();
+    }
+    // spdlog::info("Shader module: \n{}", shader_module);
+    spdlog::info("Created shader module");
 
     // Create the render pipeline
     wgpu::RenderPipelineDescriptor pipeline_descriptor{};
@@ -639,6 +604,7 @@ void Application::InitialisePipeline()
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         device.value().createRenderPipeline(pipeline_descriptor)};
 
+    spdlog::info("Created render pipeline");
     shader_module.release();
 }
 
@@ -651,8 +617,9 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
 
     required_limits.limits.maxVertexAttributes = 2;
     required_limits.limits.maxVertexBuffers = 1;
+    constexpr int kNumPoints{15};
     required_limits.limits.maxBufferSize =
-        static_cast<long>(6) * 5 * sizeof(float);
+        static_cast<long>(kNumPoints) * 5 * sizeof(float);
     required_limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
     required_limits.limits.maxInterStageShaderComponents = 3;
 
@@ -676,29 +643,19 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
 
 void Application::InitialiseBuffers()
 {
-    const std::vector<float> point_data{
-        // each pair here forms the x,y coordinates of a triangle vertex
-        // clang-format off
-        // NOLINTBEGIN(readability-magic-numbers)
-        // first triangle
-        // x0, y0, red0, green0, blue0
-        -0.5F, -0.5F, 1.0F, 0.0F, 0.0F,
-        0.5F, -0.5F, 0.0F, 1.0F, 0.0F,
-        0.5F, 0.5F, 0.0F, 0.0F, 1.0F,
-        -0.5F, 0.5F, 1.0F, 1.0F, 0.0F,
+    std::vector<float> point_data;
+    std::vector<uint16_t> index_data;
+    const bool success{ResourceManager::load_geometry(RESOURCE_DIR
+                                                      "/webgpu.txt",
+                                                      point_data,
+                                                      index_data)};
 
-        // NOLINTEND(readability-magic-numbers)
-        // clang-format on
-    };
-    const std::vector<uint16_t> index_data{
-        0,
-        1,
-        2, // triangle 0 connects points 0, 1 & 2
-        0,
-        2,
-        3}; // triangle 1 connects points 0, 2 & 3
+    if (!success)
+    {
+        spdlog::error("Could not load geometry");
+        std::abort();
+    }
     index_count = static_cast<uint32_t>(index_data.size());
-    // point_count = static_cast<uint32_t>(point_data.size() / 5);
 
     wgpu::BufferDescriptor buffer_descriptor{};
     buffer_descriptor.size = point_data.size() * sizeof(float);

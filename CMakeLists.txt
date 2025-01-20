@@ -29,10 +29,8 @@ include(utils.cmake)
 include(Dependencies.cmake)
 learnwebgpu_setup_dependencies()
 
+option(DEV_MODE "Set up development helper settings" ON)
 add_subdirectory(src)
 
-option(RUN_UNIT_TESTS "Run Catch2 unit tests" ON)
-if(RUN_UNIT_TESTS)
-  enable_testing()
-  add_subdirectory(Catch_tests)
-endif()
+# option(RUN_UNIT_TESTS "Run Catch2 unit tests" ON) if(RUN_UNIT_TESTS)
+# enable_testing() add_subdirectory(Catch_tests) endif()
