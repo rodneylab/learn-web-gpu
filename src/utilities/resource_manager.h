@@ -1,14 +1,8 @@
 #ifndef SRC_RESOURCE_MANAGER_H
 #define SRC_RESOURCE_MANAGER_H
 
-// #ifndef WEBGPU_CPP_IMPLEMENTATION
 #define WEBGPU_CPP_IMPLEMENTATION
 #include <webgpu/webgpu.hpp>
-
-// #include <cstdint>
-// #include <filesystem>
-// #include <iterator>
-// #include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -53,7 +47,7 @@ bool ResourceManager::load_geometry(const std::filesystem::path &path,
         Points,
         Indices
     };
-    Section currrent_section{Section::None};
+    Section current_section{Section::None};
 
     float value{};
     uint16_t index{};
@@ -71,17 +65,17 @@ bool ResourceManager::load_geometry(const std::filesystem::path &path,
 
         if (line == "[points]")
         {
-            currrent_section = Section::Points;
+            current_section = Section::Points;
         }
         else if (line == "[indices]")
         {
-            currrent_section = Section::Indices;
+            current_section = Section::Indices;
         }
         else if (line[0] == '#' || line.empty())
         {
             // nothing to do
         }
-        else if (currrent_section == Section::Points)
+        else if (current_section == Section::Points)
         {
             std::istringstream iss{line};
             for (int i{0}; i < 5; ++i)
@@ -90,7 +84,7 @@ bool ResourceManager::load_geometry(const std::filesystem::path &path,
                 point_data.push_back(value);
             }
         }
-        else if (currrent_section == Section::Indices)
+        else if (current_section == Section::Indices)
         {
             std::istringstream iss(line);
             for (int i{0}; i < 3; ++i)

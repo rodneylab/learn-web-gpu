@@ -22,15 +22,6 @@ function(learnwebgpu_setup_dependencies)
   cpmaddpackage("gh:gabime/spdlog#276ee5f5c0eb13626bd367b006ace5eae9526d8a"
   )# v1.x release fixes fmt compatibility issue
 
-  # if(NOT TARGET webgpu) message(STATUS "Include WebGPU-distribution") #
-  # cpmaddpackage( #
-  # "gh:eliemichel/WebGPU-distribution#b763f1277733bf5ccc07202f7ab51ad1fdb64453"
-  # # ) wgpu-v0.19.4.1 cpmaddpackage( #
-  # "gh:eliemichel/WebGPU-distribution#54a60379a9d792848a2311856375ceef16db150e"
-  # # ) # wgpu-v0.19.4.1 + fix cpmaddpackage(
-  # "gh:eliemichel/WebGPU-distribution#992fef64da25072ebe3844a73f7103105e7fd133"
-  # ) # wgpu-static-v0.19.4.1 + fix message( STATUS "Added WebGPU-distribution
-  # with CPM as ${CPM_LAST_PACKAGE_NAME}") endif()
   cpmaddpackage(
     "gh:eliemichel/WebGPU-distribution#992fef64da25072ebe3844a73f7103105e7fd133"
   ) # wgpu-static-v0.19.4.1 + fix

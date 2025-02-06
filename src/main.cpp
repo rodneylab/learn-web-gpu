@@ -92,6 +92,7 @@ private:
     [[nodiscard]] static wgpu::RequiredLimits GetRequiredLimits(
         wgpu::Adapter adapter);
     void InitialiseBuffers();
+    void InitialiseBindGroups();
 
     GLFWwindow *window{nullptr};
     std::optional<wgpu::Device> device{std::nullopt};
@@ -102,7 +103,11 @@ private:
     std::optional<wgpu::RenderPipeline> pipeline{std::nullopt};
     std::optional<wgpu::Buffer> point_buffer{std::nullopt};
     std::optional<wgpu::Buffer> index_buffer{std::nullopt};
+    std::optional<wgpu::Buffer> uniform_buffer{std::nullopt};
     uint32_t index_count{};
+    std::optional<wgpu::BindGroup> bind_group{std::nullopt};
+    std::optional<wgpu::PipelineLayout> layout{std::nullopt};
+    std::optional<wgpu::BindGroupLayout> bind_group_layout{std::nullopt};
 };
 
 void signal_handler(int signal)
@@ -147,6 +152,8 @@ int main()
             app.MainLoop();
         }
 #endif // __EMSCRIPTEN__
+
+        app.Terminate();
 
         return 0;
     }
@@ -235,9 +242,10 @@ bool Application::Initialise()
         [](WGPUErrorType error_type, char const *message) {
             if (message != nullptr)
             {
-                spdlog::info("Uncaptured device error: type {} ({})",
-                             error_type,
-                             message);
+                spdlog::error("Uncaptured device error: type {} ({})",
+                              error_type,
+                              message);
+                std::abort();
             }
             else
             {
@@ -271,12 +279,29 @@ bool Application::Initialise()
 
     InitialisePipeline();
     InitialiseBuffers();
+    InitialiseBindGroups();
 
     return true;
 }
 
 void Application::Terminate()
 {
+    if (bind_group.has_value())
+    {
+        bind_group.value().release();
+    }
+    if (layout.has_value())
+    {
+        layout.value().release();
+    }
+    if (bind_group_layout.has_value())
+    {
+        bind_group_layout.value().release();
+    }
+    if (uniform_buffer.has_value())
+    {
+        uniform_buffer.value().release();
+    }
     if (point_buffer.has_value())
     {
         point_buffer.value().release();
@@ -313,11 +338,25 @@ void Application::MainLoop()
 {
     glfwPollEvents();
 
+    // Update uniform buffer
+    const float current_time{static_cast<float>(glfwGetTime())};
+    debug_assert(
+        queue.has_value(),
+        std::runtime_error(fmt::format("Queue should be initialised before "
+                                       "entering the main loop: [{}:{}]",
+                                       __FILE__,
+                                       __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().writeBuffer(uniform_buffer.value(),
+                              0,
+                              &current_time,
+                              sizeof(float));
+
     // Get the next target texture view
     std::optional<wgpu::TextureView> target_view{GetNextSurfaceTextureView()};
     debug_assert(target_view.has_value(),
                  std::runtime_error(
-                     fmt::format("Target view should be initialised before "
+                     fmt::format("Target View should be initialised before "
                                  "entering the main loop: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
@@ -363,7 +402,7 @@ void Application::MainLoop()
     renderPassDesc.depthStencilAttachment = nullptr;
     renderPassDesc.timestampWrites = nullptr;
 
-    // Create the render pass and end it immediately )we only clear the screen, and do not draw anything)
+    // Create the render pass and end it immediately (we only clear the screen, and do not draw anything)
     wgpu::RenderPassEncoder renderPass{encoder.beginRenderPass(renderPassDesc)};
     if (pipeline.has_value() && pipeline.value() != nullptr)
     {
@@ -377,7 +416,7 @@ void Application::MainLoop()
 
     debug_assert(point_buffer.has_value(),
                  std::runtime_error(
-                     fmt::format("Point buffer should be initialised before "
+                     fmt::format("Point Buffer should be initialised before "
                                  "entering the main loop: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
@@ -390,7 +429,7 @@ void Application::MainLoop()
         point_buffer.value().getSize());
     debug_assert(index_buffer.has_value(),
                  std::runtime_error(
-                     fmt::format("Index buffer should be initialised before "
+                     fmt::format("Index Buffer should be initialised before "
                                  "entering the main loop: [{}:{}]",
                                  __FILE__,
                                  __LINE__)));
@@ -402,18 +441,27 @@ void Application::MainLoop()
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         index_buffer.value().getSize());
 
+    debug_assert(bind_group.has_value(),
+                 std::runtime_error(
+                     fmt::format("Bind Group should be initialised before "
+                                 "entering the main loop: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    renderPass.setBindGroup(0, bind_group.value(), 0, nullptr);
+
     renderPass.drawIndexed(index_count, 1, 0, 0, 0);
 
     renderPass.end();
     renderPass.release();
 
-    // Finally encode and submit the render pass
+    // Finally, encode and submit the render pass
     wgpu::CommandBufferDescriptor cmdBufferDescriptor = {};
     cmdBufferDescriptor.label = "Command buffer";
     wgpu::CommandBuffer command = encoder.finish(cmdBufferDescriptor);
     encoder.release();
 
-    spdlog::info("Submitting command...");
+    spdlog::trace("Submitting command...");
     debug_assert(
         queue.has_value(),
         std::runtime_error(fmt::format("Queue should be initialised before "
@@ -424,7 +472,7 @@ void Application::MainLoop()
     queue.value().submit(1, &command);
 
     command.release();
-    spdlog::info("Command submitted.");
+    spdlog::trace("Command submitted.");
 
     // At the end of the frame
     target_view.value().release();
@@ -499,13 +547,13 @@ std::optional<wgpu::TextureView> Application::GetNextSurfaceTextureView()
 
 void Application::InitialisePipeline()
 {
+    spdlog::info("Creating shader module...");
     debug_assert(
         device.has_value(),
         std::runtime_error(fmt::format("Device should be initialised before "
                                        "creating a shader module: [{}:{}]",
                                        __FILE__,
                                        __LINE__)));
-    spdlog::info("Creating shader module...");
     wgpu::ShaderModule shader_module{ResourceManager::load_shader_module(
         RESOURCE_DIR "/shader.wgsl",
         // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
@@ -516,11 +564,10 @@ void Application::InitialisePipeline()
         spdlog::error("Could not load shader.");
         std::abort();
     }
-    // spdlog::info("Shader module: \n{}", shader_module);
-    spdlog::info("Created shader module");
 
     // Create the render pipeline
     wgpu::RenderPipelineDescriptor pipeline_descriptor{};
+    pipeline_descriptor.label = "Render pipeline";
 
     wgpu::VertexBufferLayout vertex_buffer_layout;
     std::vector<wgpu::VertexAttribute> vertex_attributes{2};
@@ -592,7 +639,30 @@ void Application::InitialisePipeline()
     pipeline_descriptor.multisample.mask = ~0U;
 
     pipeline_descriptor.multisample.alphaToCoverageEnabled = 0U;
-    pipeline_descriptor.layout = nullptr;
+    wgpu::BindGroupLayoutEntry binding_layout{wgpu::Default};
+    binding_layout.binding = 0;
+    binding_layout.visibility = wgpu::ShaderStage::Vertex;
+    binding_layout.buffer.type = wgpu::BufferBindingType::Uniform;
+    binding_layout.buffer.minBindingSize = 4 * sizeof(float);
+
+    wgpu::BindGroupLayoutDescriptor bind_group_layout_descriptor{};
+    bind_group_layout_descriptor.entryCount = 1;
+    bind_group_layout_descriptor.entries = &binding_layout;
+    bind_group_layout = std::optional<wgpu::BindGroupLayout>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createBindGroupLayout(bind_group_layout_descriptor)};
+
+    wgpu::PipelineLayoutDescriptor layout_descriptor{};
+    layout_descriptor.bindGroupLayoutCount = 1;
+    layout_descriptor.bindGroupLayouts =
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access,cppcoreguidelines-pro-type-cstyle-cast)
+        (WGPUBindGroupLayout *)&bind_group_layout.value();
+    layout = std::optional<wgpu::PipelineLayout>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createPipelineLayout(layout_descriptor)};
+
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    pipeline_descriptor.layout = layout.value();
 
     debug_assert(
         device.has_value(),
@@ -622,6 +692,11 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter)
         static_cast<long>(kNumPoints) * 5 * sizeof(float);
     required_limits.limits.maxVertexBufferArrayStride = 5 * sizeof(float);
     required_limits.limits.maxInterStageShaderComponents = 3;
+
+    required_limits.limits.maxBindGroups = 1;
+    required_limits.limits.maxUniformBuffersPerShaderStage = 1;
+    constexpr uint64_t kFloatBits{16};
+    required_limits.limits.maxUniformBufferBindingSize = kFloatBits * 4;
 
     // Default values might not be supported by the adapter, so assign adapter
     // the known supported minimum values
@@ -681,7 +756,7 @@ void Application::InitialiseBuffers()
                                  __LINE__)));
     debug_assert(vertex_buffer.has_value(),
                  std::runtime_error(
-                     fmt::format("Vertex buffer should have been initialised "
+                     fmt::format("Vertex Buffer should have been initialised "
                                  "before attempting to write to it in "
                                  "the InitialiseBuffers function: [{}:{}]",
                                  __FILE__,
@@ -700,12 +775,77 @@ void Application::InitialiseBuffers()
             ~(uint8_t)3); // round up to the next multiple of 4
     buffer_descriptor.usage =
         wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index;
-    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
-    index_buffer = device.value().createBuffer(buffer_descriptor);
+    index_buffer = std::optional<wgpu::Buffer>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createBuffer(buffer_descriptor)};
 
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     queue.value().writeBuffer(index_buffer.value(),
                               0,
                               index_data.data(),
                               buffer_descriptor.size);
+
+    // Create uniform buffer
+    // The buffer will only contain one float, with the value of uTime.  The
+    // remaining three float are created to satisfy alignment constraints, and
+    // are left empty.
+    buffer_descriptor.size = 4 * sizeof(float);
+    buffer_descriptor.usage =
+        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform;
+    buffer_descriptor.mappedAtCreation = 0U;
+
+    uniform_buffer = std::optional<wgpu::Buffer>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createBuffer(buffer_descriptor)};
+
+    // Upload uniform data
+    constexpr float current_time{1.F};
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    queue.value().writeBuffer(uniform_buffer.value(),
+                              0,
+                              &current_time,
+                              sizeof(float));
+}
+
+void Application::InitialiseBindGroups()
+{
+    debug_assert(bind_group_layout.has_value(),
+                 std::runtime_error(fmt::format(
+                     "Bind Group Layout should have been initialised "
+                     "before attempting to initialise bind groups "
+                     "the InitialiseBuffers function: [{}:{}]",
+                     __FILE__,
+                     __LINE__)));
+    debug_assert(uniform_buffer.has_value(),
+                 std::runtime_error(
+                     fmt::format("Uniform Buffer should have been initialised "
+                                 "before attempting to initialise bind groups "
+                                 "the InitialiseBuffers function: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+
+    wgpu::BindGroupEntry binding{};
+    binding.binding = 0;
+
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    binding.buffer = uniform_buffer.value();
+    binding.offset = 0;
+    binding.size = 4 * sizeof(float);
+
+    wgpu::BindGroupDescriptor bind_group_descriptor{};
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+    bind_group_descriptor.layout = bind_group_layout.value();
+    bind_group_descriptor.entryCount = 1;
+    bind_group_descriptor.entries = &binding;
+
+    debug_assert(device.has_value(),
+                 std::runtime_error(
+                     fmt::format("Device Buffer should have been initialised "
+                                 "before attempting to initialise bind groups "
+                                 "the InitialiseBuffers function: [{}:{}]",
+                                 __FILE__,
+                                 __LINE__)));
+    bind_group = std::optional<wgpu::BindGroup>{
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        device.value().createBindGroup(bind_group_descriptor)};
 }
