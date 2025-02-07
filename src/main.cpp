@@ -33,41 +33,49 @@ class Error
 {
 };
 
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 auto format_as(WGPUErrorType error_type)
 {
     return fmt::underlying(error_type);
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 auto format_as(WGPUDeviceLostReason reason)
 {
     return fmt::underlying(reason);
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 auto format_as(WGPUBufferMapAsyncStatus status)
 {
     return fmt::underlying(status);
 }
 
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 auto format_as(WGPUQueueWorkDoneStatus status)
 {
     return fmt::underlying(status);
 }
 
-void wgpu_poll_events([[maybe_unused]] wgpu::Device device,
-                      [[maybe_unused]] bool yield_to_browser)
+namespace
 {
-#if defined(WEBGPU_BACKEND_DAWN)
-    device.tick();
-#elif defined(WEBGPU_BACKEND_WGPU)
-    // device.poll(false);
-    wgpuDevicePoll(device, 0U, nullptr);
-#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
-    if (yield_to_browser)
+void signal_handler(int signal)
+{
+    if (signal == SIGABRT)
     {
-        emscripten_sleep(100);
+        spdlog::info("Abort signal received");
+        spdlog::error("Abort signal received");
+        std::cerr << "Abort signal received\n";
     }
-#endif
+    else
+    {
+        spdlog::info("Unexpected signal received");
+        spdlog::error("Unexpected signal received");
+        std::cerr << "Unexpected signal received\n";
+    }
+    std::_Exit(EXIT_FAILURE);
 }
+} // namespace
 
 class Application
 {
@@ -110,25 +118,14 @@ private:
     std::optional<wgpu::BindGroupLayout> bind_group_layout{std::nullopt};
 };
 
-void signal_handler(int signal)
-{
-    if (signal == SIGABRT)
-    {
-        spdlog::info("Abort signal received");
-        spdlog::error("Abort signal received");
-        std::cerr << "Abort signal received\n";
-    }
-    else
-    {
-        spdlog::info("Unexpected signal received");
-        spdlog::error("Unexpected signal received");
-        std::cerr << "Unexpected signal received\n";
-    }
-    std::_Exit(EXIT_FAILURE);
-}
-
 int main()
 {
+    const auto signal_handler_set_result = signal(SIGABRT, signal_handler);
+    if (signal_handler_set_result == SIG_ERR)
+    {
+        spdlog::error("Error setting abourt signal handler.");
+    }
+
     try
     {
         Application app;
