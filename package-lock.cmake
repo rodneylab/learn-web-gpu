@@ -15,7 +15,7 @@ cpmdeclarepackage(
 cpmdeclarepackage(
   glfw
   GIT_TAG
-  7b6aead9fb88b3623e3b3725ebb42670cbe4c579
+  e7ea71be039836da3a98cea55ae5569cb5eb885c
   GITHUB_REPOSITORY
   glfw/glfw
   SYSTEM
