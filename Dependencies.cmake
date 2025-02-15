@@ -4,8 +4,8 @@ function(learnwebgpu_setup_dependencies)
   cpmusepackagelock(package-lock.cmake)
 
   message(STATUS "Include fmtlib")
-  cpmaddpackage("gh:fmtlib/fmt#e3ddede6c4ee818825c4e5a6dfa1d384860c27d9"
-  )# 11.1.1
+  cpmaddpackage("gh:fmtlib/fmt#9cf9f38eded63e5e0fb95cd536ba51be601d7fa2"
+  )# 11.1.3
   message(STATUS "Added fmtlib with CPM as ${CPM_LAST_PACKAGE_NAME}")
 
   message(STATUS "Include GLFW")
@@ -19,8 +19,10 @@ function(learnwebgpu_setup_dependencies)
   message(STATUS "Include spdlog")
   # cpmaddpackage("gh:gabime/spdlog#8e5613379f5140fefb0b60412fbf1f5406e7c7f8" )#
   # v1.15.0
-  cpmaddpackage("gh:gabime/spdlog#276ee5f5c0eb13626bd367b006ace5eae9526d8a"
-  )# v1.x release fixes fmt compatibility issue
+  cpmaddpackage("gh:gabime/spdlog#f355b3d58f7067eee1706ff3c801c2361011f3d5"
+  )# v1.15.1
+  # cpmaddpackage("gh:gabime/spdlog#276ee5f5c0eb13626bd367b006ace5eae9526d8a" )#
+  # v1.x release fixes fmt compatibility issue
 
   cpmaddpackage(
     "gh:eliemichel/WebGPU-distribution#992fef64da25072ebe3844a73f7103105e7fd133"

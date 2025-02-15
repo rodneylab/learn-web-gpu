@@ -14,11 +14,12 @@
 #include <emscripten.h>
 #endif
 
+#include <array>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
-#include <iostream>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -63,15 +64,11 @@ void signal_handler(int signal)
 {
     if (signal == SIGABRT)
     {
-        spdlog::info("Abort signal received");
         spdlog::error("Abort signal received");
-        std::cerr << "Abort signal received\n";
     }
     else
     {
-        spdlog::info("Unexpected signal received");
         spdlog::error("Unexpected signal received");
-        std::cerr << "Unexpected signal received\n";
     }
     std::_Exit(EXIT_FAILURE);
 }
@@ -93,6 +90,20 @@ public:
     bool IsRunning();
 
 private:
+    struct MyUniforms
+    {
+        std::array<float, 4> colour;
+        float time;
+        // Padding needed to bring struct size up to a multiple of the largest
+        // field size (color array in this case).
+        // https://eliemichel.github.io/LearnWebGPU/basic-3d-rendering/shader-uniforms/multiple-uniforms.html#padding
+        // Tool to generate stuct with padding: https://eliemichel.github.io/WebGPU-AutoLayout/
+        std::array<float, 3> _pad;
+    };
+
+    // See comment above on MyUniform padding
+    static_assert(sizeof(MyUniforms) % sizeof(std::array<float, 4>) == 0);
+
     std::optional<wgpu::TextureView> GetNextSurfaceTextureView();
 
     // Substep of Initialise() that creates the render pipeline
@@ -345,7 +356,8 @@ void Application::MainLoop()
                                        __LINE__)));
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     queue.value().writeBuffer(uniform_buffer.value(),
-                              0,
+                              // only update the time field
+                              offsetof(MyUniforms, time),
                               &current_time,
                               sizeof(float));
 
@@ -638,9 +650,10 @@ void Application::InitialisePipeline()
     pipeline_descriptor.multisample.alphaToCoverageEnabled = 0U;
     wgpu::BindGroupLayoutEntry binding_layout{wgpu::Default};
     binding_layout.binding = 0;
-    binding_layout.visibility = wgpu::ShaderStage::Vertex;
+    binding_layout.visibility =
+        wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
     binding_layout.buffer.type = wgpu::BufferBindingType::Uniform;
-    binding_layout.buffer.minBindingSize = 4 * sizeof(float);
+    binding_layout.buffer.minBindingSize = sizeof(MyUniforms);
 
     wgpu::BindGroupLayoutDescriptor bind_group_layout_descriptor{};
     bind_group_layout_descriptor.entryCount = 1;
@@ -783,10 +796,7 @@ void Application::InitialiseBuffers()
                               buffer_descriptor.size);
 
     // Create uniform buffer
-    // The buffer will only contain one float, with the value of uTime.  The
-    // remaining three float are created to satisfy alignment constraints, and
-    // are left empty.
-    buffer_descriptor.size = 4 * sizeof(float);
+    buffer_descriptor.size = sizeof(MyUniforms);
     buffer_descriptor.usage =
         wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform;
     buffer_descriptor.mappedAtCreation = 0U;
@@ -797,11 +807,19 @@ void Application::InitialiseBuffers()
 
     // Upload uniform data
     constexpr float current_time{1.F};
+    constexpr float kRedIntensity{0.0F};
+    constexpr float kGreenIntensity{1.0F};
+    constexpr float kBlueIntensity{0.4F};
+    const MyUniforms uniforms{
+        {kRedIntensity, kGreenIntensity, kBlueIntensity, 1.0F}, // colour
+        current_time,                                           // time
+        {}                                                      // _pad
+    };
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     queue.value().writeBuffer(uniform_buffer.value(),
                               0,
-                              &current_time,
-                              sizeof(float));
+                              &uniforms,
+                              sizeof(MyUniforms));
 }
 
 void Application::InitialiseBindGroups()
@@ -827,7 +845,7 @@ void Application::InitialiseBindGroups()
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     binding.buffer = uniform_buffer.value();
     binding.offset = 0;
-    binding.size = 4 * sizeof(float);
+    binding.size = sizeof(MyUniforms);
 
     wgpu::BindGroupDescriptor bind_group_descriptor{};
     // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
